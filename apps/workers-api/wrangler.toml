@@ -10,4 +10,4 @@ CORS_ORIGIN = "*"
 [[d1_databases]]
 binding = "DB"
 database_name = "cryptosentinel-db"
-database_id = "placeholder-will-be-set-after-create"
+database_id = "b059e775-f51d-43e8-b793-406f63ad99f6"
