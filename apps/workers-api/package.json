@@ -1,0 +1,18 @@
+{
+  "name": "@cryptosentinel/workers-api",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 execute cryptosentinel-db --local --file=./schema.sql",
+    "db:migrate:prod": "wrangler d1 execute cryptosentinel-db --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240620.0",
+    "wrangler": "^3.60.0"
+  }
+}
