@@ -1,0 +1,38 @@
+{
+  "name": "cryptosentinel-pro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-powered crypto trading system",
+  "scripts": {
+    "dev": "pnpm run --parallel dev",
+    "dev:server": "pnpm --filter @cryptosentinel/server dev",
+    "dev:web": "pnpm --filter @cryptosentinel/web dev",
+    "build": "pnpm run --parallel build",
+    "build:server": "pnpm --filter @cryptosentinel/server build",
+    "build:web": "pnpm --filter @cryptosentinel/web build",
+    "db:generate": "pnpm --filter @cryptosentinel/server prisma:generate",
+    "db:push": "pnpm --filter @cryptosentinel/server prisma:push",
+    "db:migrate": "pnpm --filter @cryptosentinel/server prisma:migrate",
+    "db:studio": "pnpm --filter @cryptosentinel/server prisma:studio",
+    "lint": "pnpm run --parallel lint",
+    "clean": "pnpm run --parallel clean",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:build": "docker compose build",
+    "engine:train": "cd apps/engine && python -m src.training.pipeline",
+    "engine:monitor": "cd apps/engine && python -m src.training.monitor"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "ccxt"
+    ]
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}

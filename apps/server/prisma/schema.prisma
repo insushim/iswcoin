@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Exchange {
+  BINANCE
+  UPBIT
+  BYBIT
+  BITHUMB
+}
+
+enum Strategy {
+  DCA
+  GRID
+  MARTINGALE
+  TRAILING
+  MOMENTUM
+  MEAN_REVERSION
+  RL_AGENT
+}
+
+enum BotMode {
+  PAPER
+  REAL
+}
+
+enum BotStatus {
+  IDLE
+  RUNNING
+  STOPPED
+  ERROR
+}
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP_LOSS
+  TAKE_PROFIT
+}
+
+enum AlertType {
+  PRICE
+  TRADE
+  RISK
+  ANOMALY
+  SYSTEM
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  apiKeys        ApiKey[]
+  bots           Bot[]
+  portfolios     Portfolio[]
+  alerts         Alert[]
+  backtestResults BacktestResult[]
+
+  @@map("users")
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  userId    String
+  exchange  Exchange
+  apiKey    String
+  apiSecret String
+  label     String   @default("")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_keys")
+}
+
+model Bot {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  symbol     String
+  exchange   Exchange
+  strategy   Strategy
+  mode       BotMode   @default(PAPER)
+  status     BotStatus @default(IDLE)
+  config     Json      @default("{}")
+  riskConfig Json      @default("{}")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trades         Trade[]
+  backtestResults BacktestResult[]
+  logs           BotLog[]
+
+  @@map("bots")
+}
+
+model Trade {
+  id        String    @id @default(cuid())
+  botId     String
+  symbol    String
+  side      TradeSide
+  type      OrderType
+  price     Float
+  amount    Float
+  fee       Float     @default(0)
+  pnl       Float?
+  timestamp DateTime  @default(now())
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId, timestamp])
+  @@map("trades")
+}
+
+model Portfolio {
+  id         String   @id @default(cuid())
+  userId     String
+  totalValue Float
+  dailyPnL   Float    @default(0)
+  positions  Json     @default("[]")
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("portfolios")
+}
+
+model Alert {
+  id        String    @id @default(cuid())
+  userId    String
+  type      AlertType
+  message   String
+  severity  Severity  @default(MEDIUM)
+  isRead    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("alerts")
+}
+
+model MarketData {
+  id        String   @id @default(cuid())
+  symbol    String
+  timeframe String
+  data      Json
+  createdAt DateTime @default(now())
+
+  @@index([symbol, timeframe])
+  @@map("market_data")
+}
+
+model BacktestResult {
+  id        String   @id @default(cuid())
+  userId    String
+  botId     String?
+  config    Json
+  result    Json
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bot  Bot? @relation(fields: [botId], references: [id], onDelete: SetNull)
+
+  @@map("backtest_results")
+}
+
+model BotLog {
+  id        String   @id @default(cuid())
+  botId     String
+  level     LogLevel
+  message   String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId, createdAt])
+  @@map("bot_logs")
+}
