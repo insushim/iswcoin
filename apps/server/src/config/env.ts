@@ -3,15 +3,24 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const isProd = process.env.NODE_ENV === 'production';
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   SERVER_PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().default('postgresql://postgres:postgres@localhost:5432/cryptosentinel'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
-  JWT_SECRET: z.string().default('default-jwt-secret-change-in-production'),
+  JWT_SECRET: isProd
+    ? z.string().min(32)
+    : z.string().default('dev-jwt-secret-do-not-use-in-prod'),
   JWT_EXPIRES_IN: z.string().default('7d'),
-  ENCRYPTION_KEY: z.string().min(32).default('01234567890123456789012345678901'),
+  ENCRYPTION_KEY: isProd
+    ? z.string().length(32)
+    : z.string().min(32).default('01234567890123456789012345678901'),
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
+  // 레이트 리미팅
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000), // 15분
+  RATE_LIMIT_MAX: z.coerce.number().default(200),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
   BINANCE_API_KEY: z.string().optional(),

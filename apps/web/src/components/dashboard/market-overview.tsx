@@ -30,7 +30,7 @@ const COIN_NAMES: Record<string, string> = {
 export function MarketOverview({ tickers }: MarketOverviewProps) {
   return (
     <Card>
-      <CardHeader>Market Overview</CardHeader>
+      <CardHeader>시장 현황</CardHeader>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {tickers.map((ticker) => (
           <div
@@ -82,7 +82,7 @@ export function MarketOverview({ tickers }: MarketOverviewProps) {
 
         {tickers.length === 0 && (
           <div className="col-span-full py-8 text-center text-sm text-slate-500">
-            No market data available
+            시장 데이터를 불러올 수 없습니다
           </div>
         )}
       </div>

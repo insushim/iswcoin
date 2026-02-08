@@ -9,8 +9,8 @@ import { Header } from "@/components/layout/header";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "CryptoSentinel Pro - AI Trading Dashboard",
-  description: "AI-powered crypto trading system with real-time monitoring",
+  title: "CryptoSentinel Pro - AI 트레이딩 대시보드",
+  description: "AI 기반 실시간 암호화폐 자동매매 시스템",
 };
 
 export default function RootLayout({
@@ -19,7 +19,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="ko" className="dark">
       <body className={`${inter.variable} font-sans bg-slate-950 text-white antialiased`}>
         <QueryProvider>
           <SocketProvider>

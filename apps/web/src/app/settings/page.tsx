@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth.store";
 import { Exchange } from "@cryptosentinel/shared";
+import api, { endpoints } from "@/lib/api";
 import {
   Key,
   Bell,
@@ -20,6 +21,7 @@ import {
   Save,
   Shield,
   MessageCircle,
+  Check,
 } from "lucide-react";
 
 interface ApiKeyEntry {
@@ -52,10 +54,13 @@ const DEMO_API_KEYS: ApiKeyEntry[] = [
 
 export default function SettingsPage() {
   const { user } = useAuthStore();
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   // Profile state
-  const [profileName, setProfileName] = useState(user?.name ?? "Trader");
-  const [profileEmail, setProfileEmail] = useState(user?.email ?? "trader@example.com");
+  const [profileName, setProfileName] = useState(user?.name ?? "");
+  const [profileEmail, setProfileEmail] = useState(user?.email ?? "");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   // API Keys state
   const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>(DEMO_API_KEYS);
@@ -74,7 +79,66 @@ export default function SettingsPage() {
   const [notifyDailyReport, setNotifyDailyReport] = useState(true);
   const [notifyRegimeChange, setNotifyRegimeChange] = useState(false);
 
-  const handleAddKey = () => {
+  // Load API keys and settings from server
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await api.get(endpoints.settings.apiKeys);
+      const data = res.data.data ?? res.data;
+      if (Array.isArray(data) && data.length > 0) {
+        setApiKeys(data.map((k: Record<string, unknown>) => ({
+          id: (k.id as string) || "",
+          exchange: (k.exchange as Exchange) || Exchange.BINANCE,
+          label: (k.label as string) || "",
+          keyPreview: (k.keyPreview as string) || (k.key_preview as string) || "",
+          createdAt: (k.createdAt as string) || (k.created_at as string) || "",
+          isActive: Boolean(k.isActive ?? k.is_active ?? true),
+        })));
+      }
+    } catch {
+      // Keep demo keys
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
+
+  const showSaveMessage = (msg: string) => {
+    setSaveStatus(msg);
+    setTimeout(() => setSaveStatus(null), 3000);
+  };
+
+  const handleSaveProfile = async () => {
+    try {
+      await api.put(endpoints.settings.profile, { name: profileName, email: profileEmail });
+      if (newPassword && newPassword === confirmPassword) {
+        await api.put("/settings/password", { password: newPassword });
+        setNewPassword("");
+        setConfirmPassword("");
+      }
+      showSaveMessage("프로필이 저장되었습니다");
+    } catch {
+      showSaveMessage("프로필 저장에 실패했습니다");
+    }
+  };
+
+  const handleSaveNotifications = async () => {
+    try {
+      await api.put(endpoints.settings.notifications, {
+        telegramEnabled,
+        telegramChatId,
+        notifyTrades,
+        notifyAlerts,
+        notifyDailyReport,
+        notifyRegimeChange,
+      });
+      showSaveMessage("알림 설정이 저장되었습니다");
+    } catch {
+      showSaveMessage("알림 설정 저장에 실패했습니다");
+    }
+  };
+
+  const handleAddKey = async () => {
     if (!newKeyLabel || !newApiKey || !newApiSecret) return;
 
     const newEntry: ApiKeyEntry = {
@@ -86,6 +150,18 @@ export default function SettingsPage() {
       isActive: true,
     };
 
+    // Save to server
+    try {
+      await api.post(endpoints.settings.apiKeys, {
+        exchange: newKeyExchange,
+        label: newKeyLabel,
+        apiKey: newApiKey,
+        secretKey: newApiSecret,
+      });
+    } catch {
+      // Continue with local state update
+    }
+
     setApiKeys([...apiKeys, newEntry]);
     setNewKeyLabel("");
     setNewApiKey("");
@@ -93,7 +169,12 @@ export default function SettingsPage() {
     setShowAddKey(false);
   };
 
-  const handleRemoveKey = (id: string) => {
+  const handleRemoveKey = async (id: string) => {
+    try {
+      await api.delete(`${endpoints.settings.apiKeys}/${id}`);
+    } catch {
+      // Continue with local state update
+    }
     setApiKeys(apiKeys.filter((k) => k.id !== id));
   };
 
@@ -104,28 +185,36 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in max-w-4xl">
+      {/* Save status toast */}
+      {saveStatus && (
+        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-lg bg-slate-800 border border-slate-700 px-4 py-3 shadow-lg animate-fade-in">
+          <Check className="h-4 w-4 text-emerald-400" />
+          <span className="text-sm text-white">{saveStatus}</span>
+        </div>
+      )}
+
       {/* Profile */}
       <Card>
         <CardHeader
           action={
-            <Button variant="primary" size="sm" leftIcon={<Save className="h-3.5 w-3.5" />}>
-              Save
+            <Button variant="primary" size="sm" leftIcon={<Save className="h-3.5 w-3.5" />} onClick={handleSaveProfile}>
+              저장
             </Button>
           }
         >
           <div className="flex items-center gap-2">
             <User className="h-5 w-5 text-slate-400" />
-            Profile
+            프로필
           </div>
         </CardHeader>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
-            label="Name"
+            label="이름"
             value={profileName}
             onChange={(e) => setProfileName(e.target.value)}
           />
           <Input
-            label="Email"
+            label="이메일"
             type="email"
             value={profileEmail}
             onChange={(e) => setProfileEmail(e.target.value)}
@@ -133,14 +222,18 @@ export default function SettingsPage() {
         </div>
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
-            label="New Password"
+            label="새 비밀번호"
             type="password"
-            placeholder="Leave blank to keep current"
+            placeholder="변경하지 않으려면 비워두세요"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
           />
           <Input
-            label="Confirm Password"
+            label="비밀번호 확인"
             type="password"
-            placeholder="Confirm new password"
+            placeholder="새 비밀번호를 다시 입력하세요"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
           />
         </div>
       </Card>
@@ -155,13 +248,13 @@ export default function SettingsPage() {
               onClick={() => setShowAddKey(!showAddKey)}
               leftIcon={<Plus className="h-3.5 w-3.5" />}
             >
-              Add Key
+              키 추가
             </Button>
           }
         >
           <div className="flex items-center gap-2">
             <Key className="h-5 w-5 text-slate-400" />
-            API Keys
+            API 키
           </div>
         </CardHeader>
 
@@ -179,13 +272,13 @@ export default function SettingsPage() {
                 <div>
                   <p className="text-sm font-medium text-white">{key.label}</p>
                   <p className="text-xs text-slate-500">
-                    {key.keyPreview} &middot; Added {key.createdAt}
+                    {key.keyPreview} &middot; 추가일 {key.createdAt}
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant={key.isActive ? "running" : "stopped"} dot>
-                  {key.isActive ? "Active" : "Inactive"}
+                  {key.isActive ? "활성" : "비활성"}
                 </Badge>
                 <Button
                   variant="ghost"
@@ -201,7 +294,7 @@ export default function SettingsPage() {
 
           {apiKeys.length === 0 && (
             <p className="text-sm text-slate-500 text-center py-4">
-              No API keys configured
+              API 키가 설정되지 않았습니다
             </p>
           )}
         </div>
@@ -211,33 +304,33 @@ export default function SettingsPage() {
           <div className="mt-4 rounded-lg border border-slate-700 bg-slate-800/30 p-4 space-y-4">
             <h4 className="text-sm font-medium text-white flex items-center gap-2">
               <Shield className="h-4 w-4 text-amber-400" />
-              Add New API Key
+              새 API 키 추가
             </h4>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Select
-                label="Exchange"
+                label="거래소"
                 options={exchangeOptions}
                 value={newKeyExchange}
                 onChange={(e) => setNewKeyExchange(e.target.value as Exchange)}
               />
               <Input
-                label="Label"
-                placeholder="e.g., Main Trading"
+                label="라벨"
+                placeholder="예: 메인 트레이딩"
                 value={newKeyLabel}
                 onChange={(e) => setNewKeyLabel(e.target.value)}
               />
             </div>
             <Input
-              label="API Key"
-              placeholder="Enter your API key"
+              label="API 키"
+              placeholder="API 키를 입력하세요"
               value={newApiKey}
               onChange={(e) => setNewApiKey(e.target.value)}
             />
             <div className="relative">
               <Input
-                label="API Secret"
+                label="API 시크릿"
                 type={showSecret ? "text" : "password"}
-                placeholder="Enter your API secret"
+                placeholder="API 시크릿을 입력하세요"
                 value={newApiSecret}
                 onChange={(e) => setNewApiSecret(e.target.value)}
               />
@@ -250,14 +343,14 @@ export default function SettingsPage() {
               </button>
             </div>
             <p className="text-xs text-amber-400">
-              API secrets are encrypted and stored securely. Never share your API secret.
+              API 시크릿은 암호화되어 안전하게 저장됩니다. 절대 공유하지 마세요.
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="secondary" size="sm" onClick={() => setShowAddKey(false)}>
-                Cancel
+                취소
               </Button>
               <Button variant="primary" size="sm" onClick={handleAddKey}>
-                Add Key
+                키 추가
               </Button>
             </div>
           </div>
@@ -269,7 +362,7 @@ export default function SettingsPage() {
         <CardHeader>
           <div className="flex items-center gap-2">
             <Bell className="h-5 w-5 text-slate-400" />
-            Notifications
+            알림 설정
           </div>
         </CardHeader>
 
@@ -279,8 +372,8 @@ export default function SettingsPage() {
             <div className="flex items-center gap-3">
               <MessageCircle className="h-5 w-5 text-blue-400" />
               <div>
-                <p className="text-sm font-medium text-white">Telegram Notifications</p>
-                <p className="text-xs text-slate-500">Receive alerts via Telegram bot</p>
+                <p className="text-sm font-medium text-white">텔레그램 알림</p>
+                <p className="text-xs text-slate-500">텔레그램 봇으로 알림 수신</p>
               </div>
             </div>
             <button
@@ -301,22 +394,22 @@ export default function SettingsPage() {
 
           {telegramEnabled && (
             <Input
-              label="Telegram Chat ID"
-              placeholder="Enter your Telegram chat ID"
+              label="텔레그램 채팅 ID"
+              placeholder="텔레그램 채팅 ID를 입력하세요"
               value={telegramChatId}
               onChange={(e) => setTelegramChatId(e.target.value)}
-              helperText="Get your chat ID from @userinfobot on Telegram"
+              helperText="텔레그램에서 @userinfobot으로 채팅 ID를 확인하세요"
             />
           )}
 
           {/* Notification types */}
           <div className="space-y-2">
-            <p className="text-sm font-medium text-slate-300">Notification Types</p>
+            <p className="text-sm font-medium text-slate-300">알림 유형</p>
             {[
-              { label: "Trade Executions", desc: "When bots execute trades", state: notifyTrades, setter: setNotifyTrades },
-              { label: "Risk Alerts", desc: "Drawdown and risk warnings", state: notifyAlerts, setter: setNotifyAlerts },
-              { label: "Daily Reports", desc: "Daily PnL summary", state: notifyDailyReport, setter: setNotifyDailyReport },
-              { label: "Regime Changes", desc: "Market regime transitions", state: notifyRegimeChange, setter: setNotifyRegimeChange },
+              { label: "거래 체결", desc: "봇이 거래를 실행할 때", state: notifyTrades, setter: setNotifyTrades },
+              { label: "위험 알림", desc: "하락 및 리스크 경고", state: notifyAlerts, setter: setNotifyAlerts },
+              { label: "일일 리포트", desc: "일일 손익 요약", state: notifyDailyReport, setter: setNotifyDailyReport },
+              { label: "국면 변화", desc: "시장 국면 전환", state: notifyRegimeChange, setter: setNotifyRegimeChange },
             ].map((item) => (
               <div
                 key={item.label}
@@ -346,8 +439,8 @@ export default function SettingsPage() {
         </div>
 
         <div className="mt-4 flex justify-end">
-          <Button variant="primary" size="sm" leftIcon={<Save className="h-3.5 w-3.5" />}>
-            Save Notification Settings
+          <Button variant="primary" size="sm" leftIcon={<Save className="h-3.5 w-3.5" />} onClick={handleSaveNotifications}>
+            알림 설정 저장
           </Button>
         </div>
       </Card>

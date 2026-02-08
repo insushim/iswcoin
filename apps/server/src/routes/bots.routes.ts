@@ -1,6 +1,6 @@
 import { Router, type Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { getStrategy, type StrategyType } from '../strategies/index.js';
@@ -8,7 +8,6 @@ import { exchangeService } from '../services/exchange.service.js';
 import { decrypt } from '../utils/encryption.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const activeBots: Map<string, NodeJS.Timeout> = new Map();
 

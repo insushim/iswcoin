@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
 import { createServer } from 'node:http';
 import { env } from './config/index.js';
 import { logger } from './utils/logger.js';
@@ -19,12 +21,45 @@ import onchainRoutes from './routes/onchain.routes.js';
 const app = express();
 const httpServer = createServer(app);
 
+// 보안 헤더
+app.use(helmet());
+
+// GZIP 압축
+app.use(compression());
+
+// CORS
 app.use(cors({
   origin: env.CORS_ORIGIN,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// 레이트 리미팅
+const rateLimit = (windowMs: number, max: number) => {
+  const requests = new Map<string, { count: number; resetTime: number }>();
+
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const record = requests.get(ip);
+
+    if (!record || now > record.resetTime) {
+      requests.set(ip, { count: 1, resetTime: now + windowMs });
+      return next();
+    }
+
+    if (record.count >= max) {
+      res.status(429).json({ error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' });
+      return;
+    }
+
+    record.count++;
+    next();
+  };
+};
+
+app.use('/api/', rateLimit(env.RATE_LIMIT_WINDOW_MS, env.RATE_LIMIT_MAX));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));

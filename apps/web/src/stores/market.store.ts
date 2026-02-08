@@ -57,9 +57,22 @@ export const useMarketStore = create<MarketState>((set) => ({
     set({ isLoading: true, error: null });
     try {
       const res = await api.get(endpoints.market.tickers);
-      const tickerList = res.data.data as Ticker[];
+      const raw = res.data.data ?? res.data;
+      const rawList = Array.isArray(raw) ? raw : [];
       const tickerMap = new Map<string, Ticker>();
-      tickerList.forEach((t) => tickerMap.set(t.symbol, t));
+      rawList.forEach((t: Record<string, unknown>) => {
+        const symbol = ((t.symbol as string) || "").replace("/", "");
+        const ticker: Ticker = {
+          symbol,
+          price: Number(t.price ?? t.last ?? 0),
+          bid: Number(t.bid ?? t.price ?? 0),
+          ask: Number(t.ask ?? t.price ?? 0),
+          volume24h: Number(t.volume24h ?? t.volume ?? 0),
+          change24h: Number(t.change24h ?? 0),
+          timestamp: Number(t.timestamp ?? Date.now()),
+        };
+        tickerMap.set(symbol, ticker);
+      });
       set({ tickers: tickerMap, isLoading: false });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch tickers";
@@ -70,7 +83,8 @@ export const useMarketStore = create<MarketState>((set) => ({
   fetchIndicators: async (symbol: string) => {
     try {
       const res = await api.get(endpoints.market.indicators(symbol));
-      set({ indicators: res.data.data });
+      const data = res.data.data ?? res.data;
+      set({ indicators: data });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch indicators";
       set({ error: message });
@@ -80,7 +94,8 @@ export const useMarketStore = create<MarketState>((set) => ({
   fetchSentiment: async () => {
     try {
       const res = await api.get(endpoints.market.sentiment);
-      set({ sentiment: res.data.data });
+      const data = res.data.data ?? res.data;
+      set({ sentiment: data });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch sentiment";
       set({ error: message });

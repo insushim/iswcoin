@@ -1,8 +1,10 @@
 import { Hono } from 'hono';
-import type { Env } from '../index';
+import type { Env, AppVariables } from '../index';
 import { generateId, hashPassword, verifyPassword, createJWT } from '../utils';
 
-export const authRoutes = new Hono<{ Bindings: Env }>();
+type AuthEnv = { Bindings: Env; Variables: AppVariables };
+
+export const authRoutes = new Hono<AuthEnv>();
 
 authRoutes.post('/register', async (c) => {
   const { email, password, name } = await c.req.json();
@@ -21,7 +23,7 @@ authRoutes.post('/register', async (c) => {
     .bind(generateId(), id).run();
 
   const token = await createJWT({ userId: id, email }, c.env.JWT_SECRET);
-  return c.json({ token, user: { id, email, name } });
+  return c.json({ data: { token, user: { id, email, name } } });
 });
 
 authRoutes.post('/login', async (c) => {
@@ -35,15 +37,15 @@ authRoutes.post('/login', async (c) => {
   if (!valid) return c.json({ error: 'Invalid credentials' }, 401);
 
   const token = await createJWT({ userId: user.id, email: user.email }, c.env.JWT_SECRET);
-  return c.json({ token, user: { id: user.id, email: user.email, name: user.name } });
+  return c.json({ data: { token, user: { id: user.id, email: user.email, name: user.name } } });
 });
 
 authRoutes.get('/me', async (c) => {
-  const userId = c.req.header('x-user-id');
+  const userId = c.get('userId');
   if (!userId) return c.json({ error: 'Unauthorized' }, 401);
 
   const user = await c.env.DB.prepare('SELECT id, email, name, created_at FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ error: 'User not found' }, 404);
 
-  return c.json({ user });
+  return c.json({ data: user });
 });

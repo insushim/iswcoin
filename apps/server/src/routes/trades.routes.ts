@@ -1,11 +1,10 @@
 import { Router, type Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const tradesQuerySchema = z.object({
   botId: z.string().optional(),

@@ -5,6 +5,9 @@ import { MomentumStrategy } from './momentum.strategy.js';
 import { MeanReversionStrategy } from './mean-reversion.strategy.js';
 import { TrailingStrategy } from './trailing.strategy.js';
 import { MartingaleStrategy } from './martingale.strategy.js';
+import { StatArbStrategy } from './stat-arb.strategy.js';
+import { ScalpingStrategy } from './scalping.strategy.js';
+import { FundingArbStrategy } from './funding-arb.strategy.js';
 
 export { BaseStrategy } from './base.strategy.js';
 export type { TradeSignal, TradeAction } from './base.strategy.js';
@@ -14,6 +17,9 @@ export { MomentumStrategy } from './momentum.strategy.js';
 export { MeanReversionStrategy } from './mean-reversion.strategy.js';
 export { TrailingStrategy } from './trailing.strategy.js';
 export { MartingaleStrategy } from './martingale.strategy.js';
+export { StatArbStrategy } from './stat-arb.strategy.js';
+export { ScalpingStrategy } from './scalping.strategy.js';
+export { FundingArbStrategy } from './funding-arb.strategy.js';
 
 export type StrategyType =
   | 'DCA'
@@ -22,7 +28,10 @@ export type StrategyType =
   | 'MEAN_REVERSION'
   | 'TRAILING'
   | 'MARTINGALE'
-  | 'RL_AGENT';
+  | 'RL_AGENT'
+  | 'STAT_ARB'
+  | 'SCALPING'
+  | 'FUNDING_ARB';
 
 export function getStrategy(
   type: StrategyType,
@@ -43,6 +52,12 @@ export function getStrategy(
       return new MartingaleStrategy(config);
     case 'RL_AGENT':
       return new MomentumStrategy(config);
+    case 'STAT_ARB':
+      return new StatArbStrategy(config);
+    case 'SCALPING':
+      return new ScalpingStrategy(config);
+    case 'FUNDING_ARB':
+      return new FundingArbStrategy(config);
     default: {
       const _exhaustive: never = type;
       throw new Error(`Unknown strategy type: ${String(_exhaustive)}`);
@@ -62,6 +77,9 @@ export function getAvailableStrategies(): {
     'MEAN_REVERSION',
     'TRAILING',
     'MARTINGALE',
+    'STAT_ARB',
+    'SCALPING',
+    'FUNDING_ARB',
   ];
 
   return strategies.map((type) => {

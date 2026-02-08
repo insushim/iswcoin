@@ -75,7 +75,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <Card>
-            <CardHeader>Daily PnL (30 days)</CardHeader>
+            <CardHeader>일일 손익 (30일)</CardHeader>
             <PnLChart data={DEMO_PNL} height={280} />
           </Card>
         </div>

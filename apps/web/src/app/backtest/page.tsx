@@ -93,42 +93,42 @@ export default function BacktestPage() {
   const metrics = result
     ? [
         {
-          label: "Total Return",
+          label: "총 수익률",
           value: formatPercent(result.totalReturn),
           icon: <TrendingUp className="h-4 w-4" />,
           color: result.totalReturn >= 0 ? "text-emerald-400" : "text-red-400",
           bgColor: result.totalReturn >= 0 ? "bg-emerald-500/15" : "bg-red-500/15",
         },
         {
-          label: "Sharpe Ratio",
+          label: "샤프 비율",
           value: result.sharpeRatio.toFixed(2),
           icon: <BarChart3 className="h-4 w-4" />,
           color: result.sharpeRatio >= 1 ? "text-emerald-400" : "text-amber-400",
           bgColor: result.sharpeRatio >= 1 ? "bg-emerald-500/15" : "bg-amber-500/15",
         },
         {
-          label: "Max Drawdown",
+          label: "최대 낙폭",
           value: formatPercent(result.maxDrawdown),
           icon: <AlertTriangle className="h-4 w-4" />,
           color: "text-red-400",
           bgColor: "bg-red-500/15",
         },
         {
-          label: "Win Rate",
+          label: "승률",
           value: `${result.winRate.toFixed(1)}%`,
           icon: <Target className="h-4 w-4" />,
           color: result.winRate >= 50 ? "text-emerald-400" : "text-red-400",
           bgColor: result.winRate >= 50 ? "bg-emerald-500/15" : "bg-red-500/15",
         },
         {
-          label: "Total Trades",
+          label: "총 거래",
           value: String(result.totalTrades),
           icon: <BarChart3 className="h-4 w-4" />,
           color: "text-blue-400",
           bgColor: "bg-blue-500/15",
         },
         {
-          label: "Profit Factor",
+          label: "수익 팩터",
           value: result.profitFactor.toFixed(2),
           icon: <TrendingUp className="h-4 w-4" />,
           color: result.profitFactor >= 1 ? "text-emerald-400" : "text-red-400",
@@ -141,29 +141,29 @@ export default function BacktestPage() {
     <div className="space-y-6 animate-fade-in">
       {/* Config form */}
       <Card>
-        <CardHeader>Backtest Configuration</CardHeader>
+        <CardHeader>백테스트 설정</CardHeader>
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Select
-              label="Symbol"
+              label="종목"
               options={SYMBOL_OPTIONS}
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
             />
             <Select
-              label="Strategy"
+              label="전략"
               options={STRATEGY_OPTIONS}
               value={strategy}
               onChange={(e) => handleStrategyChange(e.target.value as StrategyType)}
             />
             <Input
-              label="Start Date"
+              label="시작일"
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
             />
             <Input
-              label="End Date"
+              label="종료일"
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
@@ -171,7 +171,7 @@ export default function BacktestPage() {
           </div>
 
           <Input
-            label="Initial Capital ($)"
+            label="초기 자본 ($)"
             type="number"
             value={initialCapital}
             onChange={(e) => setInitialCapital(e.target.value)}
@@ -194,7 +194,7 @@ export default function BacktestPage() {
               isLoading={isRunning}
               leftIcon={<Play className="h-4 w-4" />}
             >
-              Run Backtest
+              백테스트 실행
             </Button>
           </div>
         </div>
@@ -220,23 +220,23 @@ export default function BacktestPage() {
 
           {/* Equity curve */}
           <Card>
-            <CardHeader>Equity Curve</CardHeader>
+            <CardHeader>자산 곡선</CardHeader>
             <EquityCurve data={result.equityCurve} height={350} />
           </Card>
 
           {/* Trades table */}
           <Card padding="none">
             <div className="px-6 py-4 border-b border-slate-800">
-              <h3 className="text-lg font-semibold text-white">Backtest Trades</h3>
+              <h3 className="text-lg font-semibold text-white">백테스트 거래 내역</h3>
             </div>
             <div className="overflow-x-auto">
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Side</th>
-                    <th className="text-right">Price</th>
-                    <th className="text-right">PnL</th>
+                    <th>날짜</th>
+                    <th>구분</th>
+                    <th className="text-right">가격</th>
+                    <th className="text-right">손익</th>
                   </tr>
                 </thead>
                 <tbody>

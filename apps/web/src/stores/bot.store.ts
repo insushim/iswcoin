@@ -49,6 +49,25 @@ interface BotState {
   clearError: () => void;
 }
 
+function mapBot(raw: Record<string, unknown>): Bot {
+  return {
+    id: (raw.id as string) || "",
+    name: (raw.name as string) || "",
+    symbol: ((raw.symbol as string) || "BTC/USDT").replace("/", ""),
+    exchange: ((raw.exchange as string) || "BINANCE").toUpperCase() as Exchange,
+    strategy: (raw.strategy as StrategyType) || StrategyType.DCA,
+    mode: (raw.mode as TradingMode) || (raw.trading_mode as TradingMode) || TradingMode.PAPER,
+    status: (raw.status as BotStatus) || BotStatus.STOPPED,
+    config: typeof raw.config === "string" ? JSON.parse(raw.config || "{}") : (raw.config as Record<string, number | string | boolean>) || {},
+    pnl: Number(raw.pnl ?? raw.total_profit ?? 0),
+    pnlPercent: Number(raw.pnlPercent ?? raw.pnl_percent ?? 0),
+    totalTrades: Number(raw.totalTrades ?? raw.total_trades ?? 0),
+    winRate: Number(raw.winRate ?? raw.win_rate ?? 0),
+    createdAt: (raw.createdAt as string) || (raw.created_at as string) || new Date().toISOString(),
+    updatedAt: (raw.updatedAt as string) || (raw.updated_at as string) || new Date().toISOString(),
+  };
+}
+
 export const useBotStore = create<BotState>((set, get) => ({
   bots: [],
   selectedBot: null,
@@ -59,9 +78,11 @@ export const useBotStore = create<BotState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const res = await api.get(endpoints.bots.list);
-      set({ bots: res.data.data, isLoading: false });
+      const raw = res.data.data ?? res.data;
+      const botList = Array.isArray(raw) ? raw.map(mapBot) : [];
+      set({ bots: botList, isLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to fetch bots";
+      const message = err instanceof Error ? err.message : "봇 목록을 불러오지 못했습니다";
       set({ error: message, isLoading: false });
     }
   },
@@ -70,9 +91,10 @@ export const useBotStore = create<BotState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const res = await api.get(endpoints.bots.get(id));
-      set({ selectedBot: res.data.data, isLoading: false });
+      const raw = res.data.data ?? res.data;
+      set({ selectedBot: mapBot(raw), isLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to fetch bot";
+      const message = err instanceof Error ? err.message : "봇 정보를 불러오지 못했습니다";
       set({ error: message, isLoading: false });
     }
   },
@@ -81,14 +103,15 @@ export const useBotStore = create<BotState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const res = await api.post(endpoints.bots.create, payload);
-      const newBot = res.data.data as Bot;
+      const raw = res.data.data ?? res.data;
+      const newBot = mapBot(raw);
       set((state) => ({
         bots: [...state.bots, newBot],
         isLoading: false,
       }));
       return newBot;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to create bot";
+      const message = err instanceof Error ? err.message : "봇 생성에 실패했습니다";
       set({ error: message, isLoading: false });
       throw err;
     }
@@ -103,7 +126,7 @@ export const useBotStore = create<BotState>((set, get) => ({
         ),
       }));
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to start bot";
+      const message = err instanceof Error ? err.message : "봇 시작에 실패했습니다";
       set({ error: message });
     }
   },
@@ -117,7 +140,7 @@ export const useBotStore = create<BotState>((set, get) => ({
         ),
       }));
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to stop bot";
+      const message = err instanceof Error ? err.message : "봇 중지에 실패했습니다";
       set({ error: message });
     }
   },
@@ -130,7 +153,7 @@ export const useBotStore = create<BotState>((set, get) => ({
         selectedBot: state.selectedBot?.id === id ? null : state.selectedBot,
       }));
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to delete bot";
+      const message = err instanceof Error ? err.message : "봇 삭제에 실패했습니다";
       set({ error: message });
     }
   },

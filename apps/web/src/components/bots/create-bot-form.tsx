@@ -22,8 +22,21 @@ const exchangeOptions = Object.values(Exchange).map((v) => ({
   value: v,
 }));
 
+const strategyLabels: Record<string, string> = {
+  DCA: "적립식 매수 (DCA)",
+  GRID: "그리드 트레이딩",
+  MARTINGALE: "마틴게일",
+  TRAILING: "트레일링 스탑",
+  MOMENTUM: "모멘텀",
+  MEAN_REVERSION: "평균 회귀",
+  RL_AGENT: "RL 에이전트 (AI)",
+  STAT_ARB: "통계적 차익거래",
+  SCALPING: "스캘핑",
+  FUNDING_ARB: "펀딩비 차익거래",
+};
+
 const strategyOptions = Object.values(StrategyType).map((v) => ({
-  label: v.replace(/_/g, " "),
+  label: strategyLabels[v] ?? v,
   value: v,
 }));
 
@@ -50,11 +63,11 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
     setError(null);
 
     if (!name.trim()) {
-      setError("Bot name is required");
+      setError("봇 이름을 입력해주세요");
       return;
     }
     if (!symbol.trim()) {
-      setError("Symbol is required");
+      setError("종목을 입력해주세요");
       return;
     }
 
@@ -69,7 +82,7 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
       });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create bot");
+      setError(err instanceof Error ? err.message : "봇 생성에 실패했습니다");
     }
   };
 
@@ -83,13 +96,13 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Input
-          label="Bot Name"
-          placeholder="My BTC DCA Bot"
+          label="봇 이름"
+          placeholder="BTC 적립식 매수 봇"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <Input
-          label="Symbol"
+          label="종목"
           placeholder="BTCUSDT"
           value={symbol}
           onChange={(e) => setSymbol(e.target.value)}
@@ -98,13 +111,13 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Select
-          label="Exchange"
+          label="거래소"
           options={exchangeOptions}
           value={exchange}
           onChange={(e) => setExchange(e.target.value as Exchange)}
         />
         <Select
-          label="Strategy"
+          label="전략"
           options={strategyOptions}
           value={strategy}
           onChange={(e) => handleStrategyChange(e.target.value as StrategyType)}
@@ -114,7 +127,7 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
       {/* Mode toggle */}
       <div className="space-y-1.5">
         <label className="block text-sm font-medium text-slate-300">
-          Trading Mode
+          트레이딩 모드
         </label>
         <div className="flex rounded-lg border border-slate-700 p-1 w-fit">
           <button
@@ -126,7 +139,7 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            Paper Trading
+            모의 투자
           </button>
           <button
             type="button"
@@ -137,12 +150,12 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            Real Trading
+            실전 투자
           </button>
         </div>
         {mode === TradingMode.REAL && (
           <p className="text-xs text-amber-400">
-            Warning: Real trading uses actual funds. Make sure your API keys are configured.
+            경고: 실전 투자는 실제 자금이 사용됩니다. API 키가 설정되어 있는지 확인하세요.
           </p>
         )}
       </div>
@@ -155,7 +168,7 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
       {/* Actions */}
       <div className="flex justify-end gap-3 border-t border-slate-800 pt-4">
         <Button variant="secondary" type="button" onClick={onClose}>
-          Cancel
+          취소
         </Button>
         <Button
           variant="primary"
@@ -163,7 +176,7 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
           isLoading={isLoading}
           leftIcon={<Plus className="h-4 w-4" />}
         >
-          Create Bot
+          봇 생성
         </Button>
       </div>
     </form>

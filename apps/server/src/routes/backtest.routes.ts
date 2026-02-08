@@ -1,7 +1,7 @@
 import { Router, type Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import ccxt from 'ccxt';
+import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { backtesterService, type BacktestConfig } from '../services/backtester.service.js';
 import { indicatorsService } from '../services/indicators.service.js';
@@ -9,7 +9,6 @@ import { getStrategy, type StrategyType } from '../strategies/index.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const runBacktestSchema = z.object({
   symbol: z.string().min(1),

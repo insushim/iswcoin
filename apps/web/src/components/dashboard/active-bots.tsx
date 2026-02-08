@@ -30,11 +30,11 @@ export function ActiveBots({ bots }: ActiveBotsProps) {
 
   return (
     <Card>
-      <CardHeader>Active Bots</CardHeader>
+      <CardHeader>활성 봇</CardHeader>
       <div className="space-y-3">
         {activeBots.length === 0 ? (
           <p className="text-sm text-slate-500 py-4 text-center">
-            No active bots. Create one to get started.
+            활성 봇이 없습니다. 새 봇을 생성해주세요.
           </p>
         ) : (
           activeBots.map((bot) => (

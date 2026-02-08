@@ -6,14 +6,14 @@ import { Bell, User, LogOut, Settings, ChevronDown } from "lucide-react";
 import { useAuthStore } from "@/stores/auth.store";
 
 const pageNames: Record<string, string> = {
-  "/": "Dashboard",
-  "/bots": "Trading Bots",
-  "/trades": "Trade History",
-  "/market": "Market Analysis",
-  "/backtest": "Backtest",
-  "/portfolio": "Portfolio",
-  "/regime": "Market Regime",
-  "/settings": "Settings",
+  "/": "대시보드",
+  "/bots": "트레이딩 봇",
+  "/trades": "거래 내역",
+  "/market": "시장 분석",
+  "/backtest": "백테스트",
+  "/portfolio": "포트폴리오",
+  "/regime": "시장 국면",
+  "/settings": "설정",
 };
 
 export function Header() {
@@ -59,20 +59,20 @@ export function Header() {
           {showNotifications && (
             <div className="absolute right-0 top-12 w-80 rounded-xl border border-slate-800 bg-slate-900 shadow-2xl animate-slide-down">
               <div className="border-b border-slate-800 px-4 py-3">
-                <h3 className="text-sm font-semibold text-white">Notifications</h3>
+                <h3 className="text-sm font-semibold text-white">알림</h3>
               </div>
               <div className="max-h-80 overflow-y-auto">
                 <div className="px-4 py-3 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
-                  <p className="text-sm text-white">Bot &quot;BTC Momentum&quot; executed BUY</p>
-                  <p className="text-xs text-slate-500 mt-1">2 minutes ago</p>
+                  <p className="text-sm text-white">봇 &quot;BTC 모멘텀&quot; 매수 체결</p>
+                  <p className="text-xs text-slate-500 mt-1">2분 전</p>
                 </div>
                 <div className="px-4 py-3 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
-                  <p className="text-sm text-white">Market regime changed to Bull High Vol</p>
-                  <p className="text-xs text-slate-500 mt-1">15 minutes ago</p>
+                  <p className="text-sm text-white">시장 국면 변경: 상승장 고변동성</p>
+                  <p className="text-xs text-slate-500 mt-1">15분 전</p>
                 </div>
                 <div className="px-4 py-3 hover:bg-slate-800/50 transition-colors">
-                  <p className="text-sm text-white">Daily PnL report: +$342.50</p>
-                  <p className="text-xs text-slate-500 mt-1">1 hour ago</p>
+                  <p className="text-sm text-white">일일 손익 리포트: +$342.50</p>
+                  <p className="text-xs text-slate-500 mt-1">1시간 전</p>
                 </div>
               </div>
             </div>
@@ -89,7 +89,7 @@ export function Header() {
               <User className="h-4 w-4" />
             </div>
             <span className="hidden text-sm font-medium md:block">
-              {user?.name || "User"}
+              {user?.name || "사용자"}
             </span>
             <ChevronDown className="h-4 w-4" />
           </button>
@@ -97,7 +97,7 @@ export function Header() {
           {showDropdown && (
             <div className="absolute right-0 top-12 w-48 rounded-xl border border-slate-800 bg-slate-900 shadow-2xl animate-slide-down">
               <div className="px-4 py-3 border-b border-slate-800">
-                <p className="text-sm font-medium text-white">{user?.name || "User"}</p>
+                <p className="text-sm font-medium text-white">{user?.name || "사용자"}</p>
                 <p className="text-xs text-slate-500">{user?.email || "user@example.com"}</p>
               </div>
               <div className="p-1">
@@ -106,14 +106,14 @@ export function Header() {
                   className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
                 >
                   <Settings className="h-4 w-4" />
-                  Settings
+                  설정
                 </a>
                 <button
                   onClick={logout}
                   className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-400 hover:bg-slate-800 transition-colors"
                 >
                   <LogOut className="h-4 w-4" />
-                  Sign out
+                  로그아웃
                 </button>
               </div>
             </div>

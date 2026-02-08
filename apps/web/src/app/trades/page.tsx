@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { OrderSide } from "@cryptosentinel/shared";
 import { ChevronLeft, ChevronRight, Search, Filter } from "lucide-react";
+import api, { endpoints } from "@/lib/api";
 
 interface TradeRow {
   id: string;
@@ -23,49 +24,83 @@ interface TradeRow {
   timestamp: string;
 }
 
-const DEMO_TRADES: TradeRow[] = Array.from({ length: 50 }, (_, i) => {
-  const side = Math.random() > 0.5 ? OrderSide.BUY : OrderSide.SELL;
-  const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
-  const symbol = symbols[i % symbols.length];
-  const basePrice: Record<string, number> = {
-    BTCUSDT: 97000 + Math.random() * 2000,
-    ETHUSDT: 3200 + Math.random() * 100,
-    SOLUSDT: 190 + Math.random() * 20,
-    BNBUSDT: 620 + Math.random() * 20,
-    XRPUSDT: 2.3 + Math.random() * 0.3,
-  };
-  const price = basePrice[symbol];
-  const amount = symbol === "BTCUSDT" ? 0.01 + Math.random() * 0.05 : 0.5 + Math.random() * 5;
-  const total = price * amount;
-  const pnl = (Math.random() - 0.4) * 200;
-  const bots = ["BTC DCA Strategy", "ETH Grid Bot", "SOL Momentum", "BNB Mean Reversion"];
+function generateDemoTrades(): TradeRow[] {
+  return Array.from({ length: 50 }, (_, i) => {
+    const side = i % 3 === 0 ? OrderSide.SELL : OrderSide.BUY;
+    const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
+    const symbol = symbols[i % symbols.length];
+    const basePrices: Record<string, number> = { BTCUSDT: 97500, ETHUSDT: 3250, SOLUSDT: 198, BNBUSDT: 625, XRPUSDT: 2.45 };
+    const price = basePrices[symbol] * (1 + (i % 7 - 3) * 0.005);
+    const amount = symbol === "BTCUSDT" ? 0.01 + (i % 5) * 0.01 : 0.5 + (i % 5) * 0.8;
+    const total = price * amount;
+    const pnl = (i % 5 - 1.5) * 45;
+    const bots = ["BTC DCA 전략", "ETH 그리드 봇", "SOL 모멘텀", "BNB 평균회귀"];
 
+    return {
+      id: `trade-${i + 1}`,
+      symbol,
+      side,
+      type: i % 4 === 0 ? "LIMIT" : "MARKET",
+      price,
+      amount,
+      total,
+      fee: total * 0.001,
+      pnl,
+      botName: bots[i % bots.length],
+      timestamp: new Date(Date.now() - i * 3600000 * 2.5).toISOString(),
+    };
+  });
+}
+
+function mapTrade(raw: Record<string, unknown>): TradeRow {
+  const price = Number(raw.entry_price ?? raw.entryPrice ?? raw.price ?? 0);
+  const amount = Number(raw.quantity ?? raw.amount ?? 0);
   return {
-    id: `trade-${i + 1}`,
-    symbol,
-    side,
-    type: Math.random() > 0.3 ? "MARKET" : "LIMIT",
+    id: (raw.id as string) || "",
+    symbol: ((raw.symbol as string) || "").replace("/", ""),
+    side: (raw.side as OrderSide) || OrderSide.BUY,
+    type: (raw.order_type as string) || (raw.type as string) || "MARKET",
     price,
     amount,
-    total,
-    fee: total * 0.001,
-    pnl,
-    botName: bots[i % bots.length],
-    timestamp: new Date(Date.now() - i * 3600000 * (1 + Math.random() * 5)).toISOString(),
+    total: price * amount,
+    fee: Number(raw.fee ?? 0),
+    pnl: Number(raw.pnl ?? 0),
+    botName: (raw.botName as string) || (raw.bot_name as string) || "",
+    timestamp: (raw.timestamp as string) || (raw.created_at as string) || new Date().toISOString(),
   };
-});
+}
 
 const PAGE_SIZE = 10;
 
 export default function TradesPage() {
+  const [trades, setTrades] = useState<TradeRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [symbolFilter, setSymbolFilter] = useState("");
   const [sideFilter, setSideFilter] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
+  const fetchTrades = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const res = await api.get(endpoints.trades.list, { params: { limit: 100 } });
+      const raw = res.data.data ?? res.data;
+      const list = Array.isArray(raw) ? raw.map(mapTrade) : [];
+      setTrades(list.length > 0 ? list : generateDemoTrades());
+    } catch {
+      setTrades(generateDemoTrades());
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTrades();
+  }, [fetchTrades]);
+
   const filteredTrades = useMemo(() => {
-    return DEMO_TRADES.filter((trade) => {
+    return trades.filter((trade) => {
       if (symbolFilter && !trade.symbol.toLowerCase().includes(symbolFilter.toLowerCase())) {
         return false;
       }
@@ -97,21 +132,21 @@ export default function TradesPage() {
       {/* Summary stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <Card>
-          <p className="text-xs text-slate-400">Total Trades</p>
+          <p className="text-xs text-slate-400">총 거래</p>
           <p className="text-xl font-bold text-white mt-1">{filteredTrades.length}</p>
         </Card>
         <Card>
-          <p className="text-xs text-slate-400">Total PnL</p>
+          <p className="text-xs text-slate-400">총 손익</p>
           <p className={cn("text-xl font-bold mt-1", totalPnL >= 0 ? "text-emerald-400" : "text-red-400")}>
             {totalPnL >= 0 ? "+" : ""}{formatCurrency(totalPnL)}
           </p>
         </Card>
         <Card>
-          <p className="text-xs text-slate-400">Win Rate</p>
+          <p className="text-xs text-slate-400">승률</p>
           <p className="text-xl font-bold text-white mt-1">{winRate.toFixed(1)}%</p>
         </Card>
         <Card>
-          <p className="text-xs text-slate-400">Avg Trade</p>
+          <p className="text-xs text-slate-400">평균 손익</p>
           <p className="text-xl font-bold text-white mt-1">
             {filteredTrades.length > 0
               ? formatCurrency(totalPnL / filteredTrades.length)
@@ -125,19 +160,19 @@ export default function TradesPage() {
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex-1 min-w-[200px]">
             <Input
-              label="Symbol"
-              placeholder="Search symbol..."
+              label="종목"
+              placeholder="종목 검색..."
               value={symbolFilter}
               onChange={(e) => { setSymbolFilter(e.target.value); setCurrentPage(1); }}
             />
           </div>
           <div className="w-36">
             <Select
-              label="Side"
+              label="구분"
               options={[
-                { label: "All", value: "all" },
-                { label: "Buy", value: "BUY" },
-                { label: "Sell", value: "SELL" },
+                { label: "전체", value: "all" },
+                { label: "매수", value: "BUY" },
+                { label: "매도", value: "SELL" },
               ]}
               value={sideFilter}
               onChange={(e) => { setSideFilter(e.target.value); setCurrentPage(1); }}
@@ -145,7 +180,7 @@ export default function TradesPage() {
           </div>
           <div className="w-40">
             <Input
-              label="From"
+              label="시작일"
               type="date"
               value={dateFrom}
               onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }}
@@ -153,7 +188,7 @@ export default function TradesPage() {
           </div>
           <div className="w-40">
             <Input
-              label="To"
+              label="종료일"
               type="date"
               value={dateTo}
               onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }}
@@ -168,23 +203,23 @@ export default function TradesPage() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Type</th>
-                <th className="text-right">Price</th>
-                <th className="text-right">Amount</th>
-                <th className="text-right">Total</th>
-                <th className="text-right">Fee</th>
-                <th className="text-right">PnL</th>
-                <th>Bot</th>
+                <th>시간</th>
+                <th>종목</th>
+                <th>구분</th>
+                <th>유형</th>
+                <th className="text-right">가격</th>
+                <th className="text-right">수량</th>
+                <th className="text-right">총액</th>
+                <th className="text-right">수수료</th>
+                <th className="text-right">손익</th>
+                <th>봇</th>
               </tr>
             </thead>
             <tbody>
               {paginatedTrades.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="text-center py-8 text-slate-500">
-                    No trades found
+                    거래 내역이 없습니다
                   </td>
                 </tr>
               ) : (
@@ -231,9 +266,9 @@ export default function TradesPage() {
         {totalPages > 1 && (
           <div className="flex items-center justify-between border-t border-slate-800 px-4 py-3">
             <p className="text-sm text-slate-500">
-              Showing {(currentPage - 1) * PAGE_SIZE + 1} to{" "}
-              {Math.min(currentPage * PAGE_SIZE, filteredTrades.length)} of{" "}
-              {filteredTrades.length} trades
+              {filteredTrades.length}건 중{" "}
+              {(currentPage - 1) * PAGE_SIZE + 1} -{" "}
+              {Math.min(currentPage * PAGE_SIZE, filteredTrades.length)} 표시
             </p>
             <div className="flex items-center gap-2">
               <Button

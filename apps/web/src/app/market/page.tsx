@@ -122,7 +122,7 @@ export default function MarketPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Technical Indicators */}
         <Card className="lg:col-span-2">
-          <CardHeader>Technical Indicators</CardHeader>
+          <CardHeader>기술적 지표</CardHeader>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <div className="rounded-lg bg-slate-800/30 p-3">
               <p className="text-xs text-slate-400 mb-1">RSI (14)</p>
@@ -134,8 +134,8 @@ export default function MarketPage() {
                 {demoIndicators.rsi.toFixed(1)}
               </p>
               <p className="text-xs text-slate-500">
-                {demoIndicators.rsi > 70 ? "Overbought" :
-                 demoIndicators.rsi < 30 ? "Oversold" : "Neutral"}
+                {demoIndicators.rsi > 70 ? "과매수" :
+                 demoIndicators.rsi < 30 ? "과매도" : "중립"}
               </p>
             </div>
 
@@ -157,15 +157,15 @@ export default function MarketPage() {
               <p className="text-lg font-bold text-white">
                 {formatCurrency(demoIndicators.atr)}
               </p>
-              <p className="text-xs text-slate-500">Volatility measure</p>
+              <p className="text-xs text-slate-500">변동성 지표</p>
             </div>
 
             <div className="rounded-lg bg-slate-800/30 p-3">
-              <p className="text-xs text-slate-400 mb-1">Bollinger Bands</p>
+              <p className="text-xs text-slate-400 mb-1">볼린저 밴드</p>
               <div className="space-y-0.5">
-                <p className="text-xs text-red-400">U: {formatCurrency(demoIndicators.bollingerBands.upper)}</p>
-                <p className="text-xs text-white">M: {formatCurrency(demoIndicators.bollingerBands.middle)}</p>
-                <p className="text-xs text-emerald-400">L: {formatCurrency(demoIndicators.bollingerBands.lower)}</p>
+                <p className="text-xs text-red-400">상단: {formatCurrency(demoIndicators.bollingerBands.upper)}</p>
+                <p className="text-xs text-white">중단: {formatCurrency(demoIndicators.bollingerBands.middle)}</p>
+                <p className="text-xs text-emerald-400">하단: {formatCurrency(demoIndicators.bollingerBands.lower)}</p>
               </div>
             </div>
 
@@ -179,7 +179,7 @@ export default function MarketPage() {
             </div>
 
             <div className="rounded-lg bg-slate-800/30 p-3">
-              <p className="text-xs text-slate-400 mb-1">Volume 24h</p>
+              <p className="text-xs text-slate-400 mb-1">24시간 거래량</p>
               <p className="text-lg font-bold text-white">
                 {formatNumber(demoIndicators.volume24h)}
               </p>
@@ -195,7 +195,7 @@ export default function MarketPage() {
 
         {/* Sentiment Gauge */}
         <Card>
-          <CardHeader>Market Sentiment</CardHeader>
+          <CardHeader>시장 심리</CardHeader>
           <div className="space-y-6">
             {/* Fear & Greed */}
             <div className="text-center">
@@ -222,7 +222,7 @@ export default function MarketPage() {
             {/* Scores */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-slate-400">Social Score</span>
+                <span className="text-sm text-slate-400">소셜 점수</span>
                 <div className="flex items-center gap-2">
                   <div className="h-1.5 w-24 rounded-full bg-slate-700">
                     <div className="h-1.5 rounded-full bg-blue-500" style={{ width: `${demoSentiment.socialScore}%` }} />
@@ -231,7 +231,7 @@ export default function MarketPage() {
                 </div>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-slate-400">News Score</span>
+                <span className="text-sm text-slate-400">뉴스 점수</span>
                 <div className="flex items-center gap-2">
                   <div className="h-1.5 w-24 rounded-full bg-slate-700">
                     <div className="h-1.5 rounded-full bg-purple-500" style={{ width: `${demoSentiment.newsScore}%` }} />
@@ -240,7 +240,7 @@ export default function MarketPage() {
                 </div>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-slate-400">Whale Activity</span>
+                <span className="text-sm text-slate-400">고래 활동</span>
                 <Badge variant="success" dot>{demoSentiment.whaleActivity}</Badge>
               </div>
             </div>

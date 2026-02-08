@@ -13,6 +13,7 @@ interface BotCardProps {
   onStart: (id: string) => void;
   onStop: (id: string) => void;
   onDelete: (id: string) => void;
+  onSettings?: (bot: Bot) => void;
 }
 
 function getBotStatusVariant(status: BotStatus) {
@@ -30,7 +31,7 @@ function getBotStatusVariant(status: BotStatus) {
   }
 }
 
-export function BotCard({ bot, onStart, onStop, onDelete }: BotCardProps) {
+export function BotCard({ bot, onStart, onStop, onDelete, onSettings }: BotCardProps) {
   const isRunning = bot.status === BotStatus.RUNNING;
 
   return (
@@ -50,14 +51,14 @@ export function BotCard({ bot, onStart, onStop, onDelete }: BotCardProps) {
 
       {/* Strategy */}
       <div className="rounded-lg bg-slate-800/30 px-3 py-2 mb-4">
-        <p className="text-xs text-slate-400">Strategy</p>
+        <p className="text-xs text-slate-400">전략</p>
         <p className="text-sm font-medium text-white">{bot.strategy}</p>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div>
-          <p className="text-xs text-slate-400">PnL</p>
+          <p className="text-xs text-slate-400">손익</p>
           <p
             className={cn(
               "text-sm font-semibold",
@@ -69,7 +70,7 @@ export function BotCard({ bot, onStart, onStop, onDelete }: BotCardProps) {
           </p>
         </div>
         <div>
-          <p className="text-xs text-slate-400">Return</p>
+          <p className="text-xs text-slate-400">수익률</p>
           <p
             className={cn(
               "text-sm font-semibold",
@@ -80,11 +81,11 @@ export function BotCard({ bot, onStart, onStop, onDelete }: BotCardProps) {
           </p>
         </div>
         <div>
-          <p className="text-xs text-slate-400">Total Trades</p>
+          <p className="text-xs text-slate-400">총 거래</p>
           <p className="text-sm font-medium text-white">{bot.totalTrades}</p>
         </div>
         <div>
-          <p className="text-xs text-slate-400">Win Rate</p>
+          <p className="text-xs text-slate-400">승률</p>
           <p className="text-sm font-medium text-white">{bot.winRate.toFixed(1)}%</p>
         </div>
       </div>
@@ -99,7 +100,7 @@ export function BotCard({ bot, onStart, onStop, onDelete }: BotCardProps) {
               : "bg-emerald-500/15 text-emerald-400"
           )}
         >
-          {bot.mode === "PAPER" ? "Paper Trading" : "Real Trading"}
+          {bot.mode === "PAPER" ? "모의 투자" : "실전 투자"}
         </span>
       </div>
 
@@ -113,7 +114,7 @@ export function BotCard({ bot, onStart, onStop, onDelete }: BotCardProps) {
             onClick={() => onStop(bot.id)}
             leftIcon={<Square className="h-3.5 w-3.5" />}
           >
-            Stop
+            중지
           </Button>
         ) : (
           <Button
@@ -123,10 +124,10 @@ export function BotCard({ bot, onStart, onStop, onDelete }: BotCardProps) {
             onClick={() => onStart(bot.id)}
             leftIcon={<Play className="h-3.5 w-3.5" />}
           >
-            Start
+            시작
           </Button>
         )}
-        <Button variant="ghost" size="icon" className="h-8 w-8">
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onSettings?.(bot)}>
           <Settings className="h-4 w-4" />
         </Button>
         <Button

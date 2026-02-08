@@ -22,6 +22,9 @@ enum Strategy {
   MOMENTUM
   MEAN_REVERSION
   RL_AGENT
+  STAT_ARB
+  SCALPING
+  FUNDING_ARB
 }
 
 enum BotMode {
@@ -139,6 +142,8 @@ model Trade {
   bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
 
   @@index([botId, timestamp])
+  @@index([botId, side, timestamp])
+  @@index([symbol, timestamp])
   @@map("trades")
 }
 
@@ -167,6 +172,7 @@ model Alert {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
+  @@index([userId, createdAt])
   @@map("alerts")
 }
 
@@ -178,6 +184,7 @@ model MarketData {
   createdAt DateTime @default(now())
 
   @@index([symbol, timeframe])
+  @@index([symbol, timeframe, createdAt])
   @@map("market_data")
 }
 
@@ -192,6 +199,7 @@ model BacktestResult {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   bot  Bot? @relation(fields: [botId], references: [id], onDelete: SetNull)
 
+  @@index([userId, createdAt])
   @@map("backtest_results")
 }
 

@@ -59,6 +59,21 @@ export interface BacktestResult {
 
 type AnalyzeFunction = (data: OHLCVData[], config: Record<string, number>) => TradeSignal | null;
 
+export interface MonteCarloResult {
+  simulations: number;
+  confidenceLevel: number;
+  medianReturn: number;
+  meanReturn: number;
+  worstReturn: number;
+  bestReturn: number;
+  returnAtConfidence: number;
+  medianMaxDrawdown: number;
+  worstMaxDrawdown: number;
+  medianSharpe: number;
+  profitProbability: number;
+  distribution: { returnPct: number; frequency: number }[];
+}
+
 export class BacktesterService {
   private readonly DEFAULT_SLIPPAGE = 0.0005;
   private readonly DEFAULT_FEE = 0.001;
@@ -294,6 +309,139 @@ export class BacktesterService {
       expectancy,
       calmarRatio,
     };
+  }
+  /**
+   * Monte Carlo 시뮬레이션
+   * 거래 결과를 무작위 리샘플링하여 전략 안정성 평가
+   */
+  runMonteCarlo(
+    trades: BacktestTrade[],
+    initialCapital: number,
+    simulations: number = 1000,
+    confidenceLevel: number = 0.95
+  ): MonteCarloResult {
+    if (trades.length < 5) {
+      return {
+        simulations: 0,
+        confidenceLevel,
+        medianReturn: 0,
+        meanReturn: 0,
+        worstReturn: 0,
+        bestReturn: 0,
+        returnAtConfidence: 0,
+        medianMaxDrawdown: 0,
+        worstMaxDrawdown: 0,
+        medianSharpe: 0,
+        profitProbability: 0,
+        distribution: [],
+      };
+    }
+
+    logger.info('Running Monte Carlo simulation', {
+      trades: trades.length,
+      simulations,
+      confidenceLevel,
+    });
+
+    const simReturns: number[] = [];
+    const simDrawdowns: number[] = [];
+    const simSharpes: number[] = [];
+
+    for (let sim = 0; sim < simulations; sim++) {
+      // 거래를 무작위로 리샘플링 (복원 추출)
+      const sampledTrades = this.resampleTrades(trades);
+
+      let capital = initialCapital;
+      let peak = initialCapital;
+      let maxDrawdown = 0;
+      const returns: number[] = [];
+
+      for (const trade of sampledTrades) {
+        const pnlRatio = trade.pnlPercent / 100;
+        const prevCapital = capital;
+        capital *= (1 + pnlRatio);
+
+        if (capital > peak) peak = capital;
+        const dd = peak > 0 ? (peak - capital) / peak : 0;
+        if (dd > maxDrawdown) maxDrawdown = dd;
+
+        returns.push(prevCapital > 0 ? (capital - prevCapital) / prevCapital : 0);
+      }
+
+      const totalReturn = ((capital - initialCapital) / initialCapital) * 100;
+      simReturns.push(totalReturn);
+      simDrawdowns.push(maxDrawdown * 100);
+
+      // Sharpe
+      const avgReturn = returns.length > 0
+        ? returns.reduce((a, b) => a + b, 0) / returns.length
+        : 0;
+      const stdReturn = returns.length > 1
+        ? Math.sqrt(returns.reduce((sum, r) => sum + (r - avgReturn) ** 2, 0) / (returns.length - 1))
+        : 0;
+      simSharpes.push(stdReturn > 0 ? (avgReturn / stdReturn) * Math.sqrt(252) : 0);
+    }
+
+    // 정렬
+    simReturns.sort((a, b) => a - b);
+    simDrawdowns.sort((a, b) => a - b);
+    simSharpes.sort((a, b) => a - b);
+
+    const lowerIdx = Math.floor((1 - confidenceLevel) * simulations);
+    const medianIdx = Math.floor(simulations / 2);
+
+    // 분포 히스토그램 (20 bins)
+    const minReturn = simReturns[0]!;
+    const maxReturn = simReturns[simReturns.length - 1]!;
+    const binSize = (maxReturn - minReturn) / 20 || 1;
+    const distribution: { returnPct: number; frequency: number }[] = [];
+
+    for (let i = 0; i < 20; i++) {
+      const binStart = minReturn + i * binSize;
+      const binEnd = binStart + binSize;
+      const count = simReturns.filter((r) => r >= binStart && r < binEnd).length;
+      distribution.push({
+        returnPct: Math.round((binStart + binEnd) / 2 * 100) / 100,
+        frequency: count / simulations,
+      });
+    }
+
+    const profitCount = simReturns.filter((r) => r > 0).length;
+
+    const result: MonteCarloResult = {
+      simulations,
+      confidenceLevel,
+      medianReturn: Math.round(simReturns[medianIdx]! * 100) / 100,
+      meanReturn: Math.round(
+        (simReturns.reduce((a, b) => a + b, 0) / simulations) * 100
+      ) / 100,
+      worstReturn: Math.round(simReturns[0]! * 100) / 100,
+      bestReturn: Math.round(simReturns[simReturns.length - 1]! * 100) / 100,
+      returnAtConfidence: Math.round(simReturns[lowerIdx]! * 100) / 100,
+      medianMaxDrawdown: Math.round(simDrawdowns[medianIdx]! * 100) / 100,
+      worstMaxDrawdown: Math.round(simDrawdowns[simDrawdowns.length - 1]! * 100) / 100,
+      medianSharpe: Math.round(simSharpes[medianIdx]! * 100) / 100,
+      profitProbability: Math.round((profitCount / simulations) * 10000) / 100,
+      distribution,
+    };
+
+    logger.info('Monte Carlo completed', {
+      medianReturn: result.medianReturn,
+      returnAt95: result.returnAtConfidence,
+      profitProb: result.profitProbability,
+    });
+
+    return result;
+  }
+
+  private resampleTrades(trades: BacktestTrade[]): BacktestTrade[] {
+    const n = trades.length;
+    const sampled: BacktestTrade[] = [];
+    for (let i = 0; i < n; i++) {
+      const idx = Math.floor(Math.random() * n);
+      sampled.push(trades[idx]!);
+    }
+    return sampled;
   }
 }
 

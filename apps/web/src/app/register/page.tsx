@@ -23,23 +23,23 @@ export default function RegisterPage() {
     clearError();
 
     if (!name.trim()) {
-      setFormError("Name is required");
+      setFormError("이름을 입력해주세요");
       return;
     }
     if (!email.trim()) {
-      setFormError("Email is required");
+      setFormError("이메일을 입력해주세요");
       return;
     }
     if (!password) {
-      setFormError("Password is required");
+      setFormError("비밀번호를 입력해주세요");
       return;
     }
     if (password.length < 8) {
-      setFormError("Password must be at least 8 characters");
+      setFormError("비밀번호는 최소 8자 이상이어야 합니다");
       return;
     }
     if (password !== confirmPassword) {
-      setFormError("Passwords do not match");
+      setFormError("비밀번호가 일치하지 않습니다");
       return;
     }
 
@@ -63,7 +63,7 @@ export default function RegisterPage() {
           </div>
           <h1 className="text-2xl font-bold text-white">CryptoSentinel Pro</h1>
           <p className="mt-2 text-sm text-slate-400">
-            Create your account to start trading
+            계정을 만들어 트레이딩을 시작하세요
           </p>
         </div>
 
@@ -77,16 +77,16 @@ export default function RegisterPage() {
             )}
 
             <Input
-              label="Name"
+              label="이름"
               type="text"
-              placeholder="Your name"
+              placeholder="이름을 입력하세요"
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoComplete="name"
             />
 
             <Input
-              label="Email"
+              label="이메일"
               type="email"
               placeholder="trader@example.com"
               value={email}
@@ -95,18 +95,18 @@ export default function RegisterPage() {
             />
 
             <Input
-              label="Password"
+              label="비밀번호"
               type="password"
-              placeholder="Min. 8 characters"
+              placeholder="최소 8자 이상"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="new-password"
             />
 
             <Input
-              label="Confirm Password"
+              label="비밀번호 확인"
               type="password"
-              placeholder="Confirm your password"
+              placeholder="비밀번호를 다시 입력하세요"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               autoComplete="new-password"
@@ -120,25 +120,25 @@ export default function RegisterPage() {
               isLoading={isLoading}
               leftIcon={<UserPlus className="h-4 w-4" />}
             >
-              Create Account
+              계정 생성
             </Button>
           </form>
 
           <div className="mt-6 text-center">
             <p className="text-sm text-slate-400">
-              Already have an account?{" "}
+              이미 계정이 있으신가요?{" "}
               <Link
                 href="/login"
                 className="font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
               >
-                Sign in
+                로그인
               </Link>
             </p>
           </div>
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-600">
-          By creating an account, you agree to our Terms of Service and Privacy Policy
+          계정 생성 시 서비스 이용약관 및 개인정보 처리방침에 동의하게 됩니다
         </p>
       </div>
     </div>

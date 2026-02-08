@@ -1,7 +1,5 @@
 import { logger } from '../utils/logger.js';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db.js';
 
 export interface RiskConfig {
   maxTradeRiskPercent: number;
@@ -12,6 +10,16 @@ export interface RiskConfig {
   takeProfitPercent: number;
   trailingStopPercent: number;
   maxOpenPositions: number;
+  // 서킷 브레이커
+  maxConsecutiveLosses: number;
+  circuitBreakerCooldownMs: number;
+  // ATR 동적 사이징
+  atrPositionSizingEnabled: boolean;
+  atrMultiplierSL: number;
+  atrMultiplierTP: number;
+  // 변동성 조절
+  volatilityScalingEnabled: boolean;
+  targetVolatilityPct: number;
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
@@ -23,6 +31,13 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
   takeProfitPercent: 6,
   trailingStopPercent: 1.5,
   maxOpenPositions: 5,
+  maxConsecutiveLosses: 5,
+  circuitBreakerCooldownMs: 3600000, // 1시간
+  atrPositionSizingEnabled: true,
+  atrMultiplierSL: 2.0,
+  atrMultiplierTP: 3.0,
+  volatilityScalingEnabled: true,
+  targetVolatilityPct: 2.0,
 };
 
 export interface PositionSizeResult {
@@ -243,6 +258,161 @@ export class RiskManager {
         amount,
       };
     });
+  }
+
+  /**
+   * ATR 기반 동적 포지션 사이징
+   * 변동성이 높을수록 포지션 크기를 줄여 일정한 리스크 유지
+   */
+  calculateATRPositionSize(
+    capital: number,
+    riskPercent: number,
+    entryPrice: number,
+    atr: number
+  ): PositionSizeResult {
+    if (!this.riskConfig.atrPositionSizingEnabled || atr <= 0) {
+      return this.calculatePositionSize(
+        capital, riskPercent, entryPrice,
+        entryPrice * (1 - this.riskConfig.stopLossPercent / 100)
+      );
+    }
+
+    const effectiveRisk = Math.min(riskPercent, this.riskConfig.maxTradeRiskPercent);
+    const riskAmount = capital * (effectiveRisk / 100);
+
+    // ATR 기반 손절가
+    const stopLossDistance = atr * this.riskConfig.atrMultiplierSL;
+    const stopLossPrice = entryPrice - stopLossDistance;
+
+    // 포지션 크기 = 리스크금액 / ATR손절거리
+    let positionSize = riskAmount / stopLossDistance;
+    const positionValue = positionSize * entryPrice;
+    const maxPositionValue = capital * (this.riskConfig.maxPositionSizePercent / 100);
+
+    if (positionValue > maxPositionValue) {
+      positionSize = maxPositionValue / entryPrice;
+    }
+
+    // ATR 기반 익절가
+    const takeProfitLevels = [
+      { price: entryPrice + atr * this.riskConfig.atrMultiplierTP * 0.5, percentage: 30 },
+      { price: entryPrice + atr * this.riskConfig.atrMultiplierTP, percentage: 40 },
+      { price: entryPrice + atr * this.riskConfig.atrMultiplierTP * 1.5, percentage: 30 },
+    ];
+
+    logger.debug('ATR position sizing', {
+      capital,
+      atr,
+      stopLossDistance,
+      positionSize,
+      positionValue: positionSize * entryPrice,
+    });
+
+    return {
+      positionSize,
+      riskAmount: positionSize * stopLossDistance,
+      stopLossPrice,
+      takeProfitLevels,
+    };
+  }
+
+  /**
+   * 변동성 스케일링: 목표 변동성 대비 현재 변동성으로 포지션 조절
+   */
+  volatilityScaledSize(
+    basePositionSize: number,
+    currentVolatility: number
+  ): number {
+    if (!this.riskConfig.volatilityScalingEnabled || currentVolatility <= 0) {
+      return basePositionSize;
+    }
+
+    const scaleFactor = this.riskConfig.targetVolatilityPct / currentVolatility;
+    const clampedScale = Math.max(0.2, Math.min(scaleFactor, 2.0));
+
+    logger.debug('Volatility scaling', {
+      target: this.riskConfig.targetVolatilityPct,
+      current: currentVolatility,
+      scaleFactor: clampedScale,
+    });
+
+    return basePositionSize * clampedScale;
+  }
+
+  /**
+   * 서킷 브레이커: 연속 손실 감지 시 거래 일시 중단
+   */
+  async checkCircuitBreaker(botId: string): Promise<{
+    triggered: boolean;
+    consecutiveLosses: number;
+    cooldownRemainingMs: number;
+  }> {
+    const recentTrades = await prisma.trade.findMany({
+      where: { botId },
+      orderBy: { timestamp: 'desc' },
+      take: this.riskConfig.maxConsecutiveLosses + 1,
+    });
+
+    let consecutiveLosses = 0;
+    for (const trade of recentTrades) {
+      if ((trade.pnl ?? 0) < 0) {
+        consecutiveLosses++;
+      } else {
+        break;
+      }
+    }
+
+    if (consecutiveLosses >= this.riskConfig.maxConsecutiveLosses) {
+      const lastLoss = recentTrades[0];
+      if (lastLoss) {
+        const elapsed = Date.now() - lastLoss.timestamp.getTime();
+        const remaining = this.riskConfig.circuitBreakerCooldownMs - elapsed;
+
+        if (remaining > 0) {
+          logger.warn('Circuit breaker active', {
+            botId,
+            consecutiveLosses,
+            cooldownRemainingMs: remaining,
+          });
+          return { triggered: true, consecutiveLosses, cooldownRemainingMs: remaining };
+        }
+      }
+    }
+
+    return { triggered: false, consecutiveLosses, cooldownRemainingMs: 0 };
+  }
+
+  /**
+   * 일일 실현 변동성 계산 (최근 N일 수익률의 표준편차 * sqrt(365))
+   */
+  calculateRealizedVolatility(dailyReturns: number[]): number {
+    if (dailyReturns.length < 2) return 0;
+
+    const mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
+    const variance = dailyReturns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (dailyReturns.length - 1);
+
+    return Math.sqrt(variance) * Math.sqrt(365) * 100;
+  }
+
+  /**
+   * 포트폴리오 VaR (Value at Risk) - 파라메트릭 방법
+   */
+  calculateVaR(
+    portfolioValue: number,
+    dailyReturns: number[],
+    confidenceLevel: number = 0.95
+  ): number {
+    if (dailyReturns.length < 10) return 0;
+
+    const mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
+    const std = Math.sqrt(
+      dailyReturns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (dailyReturns.length - 1)
+    );
+
+    // Z-score 근사: 95% → 1.645, 99% → 2.326
+    const zScore = confidenceLevel >= 0.99 ? 2.326 : 1.645;
+
+    return portfolioValue * (mean - zScore * std);
   }
 
   getConfig(): RiskConfig {

@@ -19,14 +19,14 @@ import {
 } from "lucide-react";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/bots", label: "Bots", icon: Bot },
-  { href: "/trades", label: "Trades", icon: ArrowLeftRight },
-  { href: "/market", label: "Market", icon: LineChart },
-  { href: "/backtest", label: "Backtest", icon: FlaskConical },
-  { href: "/portfolio", label: "Portfolio", icon: Wallet },
-  { href: "/regime", label: "Regime", icon: Gauge },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/", label: "대시보드", icon: LayoutDashboard },
+  { href: "/bots", label: "트레이딩 봇", icon: Bot },
+  { href: "/trades", label: "거래 내역", icon: ArrowLeftRight },
+  { href: "/market", label: "시장 분석", icon: LineChart },
+  { href: "/backtest", label: "백테스트", icon: FlaskConical },
+  { href: "/portfolio", label: "포트폴리오", icon: Wallet },
+  { href: "/regime", label: "시장 국면", icon: Gauge },
+  { href: "/settings", label: "설정", icon: Settings },
 ];
 
 export function Sidebar() {

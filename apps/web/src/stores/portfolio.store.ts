@@ -32,7 +32,20 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
     set({ isLoading: true, error: null });
     try {
       const res = await api.get(endpoints.portfolio.summary);
-      set({ summary: res.data.data, isLoading: false });
+      const raw = res.data.data ?? res.data;
+      set({
+        summary: {
+          ...raw,
+          totalValue: Number(raw.totalValue ?? raw.portfolioValue ?? raw.total_value ?? 10000),
+          totalPnL: Number(raw.totalPnl ?? raw.totalPnL ?? raw.totalProfit ?? raw.total_pnl ?? 0),
+          dailyPnL: Number(raw.dailyPnl ?? raw.dailyPnL ?? raw.daily_pnl ?? 0),
+          dailyPnLPercent: Number(raw.dailyPnLPercent ?? raw.daily_pnl_percent ?? 0),
+          activeBots: Number(raw.activeBots ?? raw.active_bots ?? 0),
+          winRate: Number(raw.winRate ?? raw.win_rate ?? 0),
+          totalTrades: Number(raw.totalTrades ?? raw.total_trades ?? 0),
+        },
+        isLoading: false,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch portfolio";
       set({ error: message, isLoading: false });
@@ -42,7 +55,8 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
   fetchHistory: async (days: number = 30) => {
     try {
       const res = await api.get(endpoints.portfolio.history, { params: { days } });
-      set({ history: res.data.data });
+      const data = res.data.data ?? res.data;
+      set({ history: Array.isArray(data) ? data : [] });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch history";
       set({ error: message });
@@ -52,7 +66,8 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
   fetchPositions: async () => {
     try {
       const res = await api.get(endpoints.portfolio.positions);
-      set({ positions: res.data.data });
+      const data = res.data.data ?? res.data;
+      set({ positions: Array.isArray(data) ? data : [] });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch positions";
       set({ error: message });

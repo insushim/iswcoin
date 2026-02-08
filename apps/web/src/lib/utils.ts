@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { format, formatDistanceToNow } from "date-fns";
+import { ko } from "date-fns/locale";
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -13,7 +14,7 @@ export function formatCurrency(
   maximumFractionDigits?: number
 ): string {
   const maxDigits = maximumFractionDigits ?? Math.max(minimumFractionDigits, 2);
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat("ko-KR", {
     style: "currency",
     currency,
     minimumFractionDigits,
@@ -26,20 +27,23 @@ export function formatPercent(value: number, decimals: number = 2): string {
   return `${sign}${value.toFixed(decimals)}%`;
 }
 
-export function formatDate(date: string | number | Date, pattern: string = "MMM dd, yyyy HH:mm"): string {
-  return format(new Date(date), pattern);
+export function formatDate(date: string | number | Date, pattern: string = "yyyy.MM.dd HH:mm"): string {
+  return format(new Date(date), pattern, { locale: ko });
 }
 
 export function formatRelativeTime(date: string | number | Date): string {
-  return formatDistanceToNow(new Date(date), { addSuffix: true });
+  return formatDistanceToNow(new Date(date), { addSuffix: true, locale: ko });
 }
 
 export function formatNumber(value: number, decimals: number = 2): string {
-  if (Math.abs(value) >= 1_000_000_000) {
-    return `${(value / 1_000_000_000).toFixed(decimals)}B`;
+  if (Math.abs(value) >= 1_000_000_000_000) {
+    return `${(value / 1_000_000_000_000).toFixed(decimals)}조`;
   }
-  if (Math.abs(value) >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(decimals)}M`;
+  if (Math.abs(value) >= 100_000_000) {
+    return `${(value / 100_000_000).toFixed(decimals)}억`;
+  }
+  if (Math.abs(value) >= 10_000) {
+    return `${(value / 10_000).toFixed(decimals)}만`;
   }
   if (Math.abs(value) >= 1_000) {
     return `${(value / 1_000).toFixed(decimals)}K`;

@@ -31,6 +31,9 @@ export enum StrategyType {
   MOMENTUM = "MOMENTUM",
   MEAN_REVERSION = "MEAN_REVERSION",
   RL_AGENT = "RL_AGENT",
+  STAT_ARB = "STAT_ARB",
+  SCALPING = "SCALPING",
+  FUNDING_ARB = "FUNDING_ARB",
 }
 
 export enum MarketRegime {

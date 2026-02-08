@@ -101,6 +101,7 @@ const DEMO_BOTS: Bot[] = [
 export default function BotsPage() {
   const { bots, fetchBots, startBot, stopBot, deleteBot, isLoading } = useBotStore();
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [settingsBot, setSettingsBot] = useState<Bot | null>(null);
 
   useEffect(() => {
     fetchBots().catch(() => {});
@@ -117,9 +118,9 @@ export default function BotsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-white">Trading Bots</h2>
+          <h2 className="text-2xl font-bold text-white">트레이딩 봇</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Manage and monitor your automated trading bots
+            자동매매 봇을 관리하고 모니터링하세요
           </p>
         </div>
         <Button
@@ -127,7 +128,7 @@ export default function BotsPage() {
           onClick={() => setShowCreateModal(true)}
           leftIcon={<Plus className="h-4 w-4" />}
         >
-          Create Bot
+          봇 생성
         </Button>
       </div>
 
@@ -135,16 +136,16 @@ export default function BotsPage() {
       {displayBots.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20">
           <BotIcon className="h-16 w-16 text-slate-700 mb-4" />
-          <h3 className="text-lg font-semibold text-slate-400">No bots yet</h3>
+          <h3 className="text-lg font-semibold text-slate-400">봇이 없습니다</h3>
           <p className="text-sm text-slate-500 mt-1 mb-4">
-            Create your first trading bot to get started
+            첫 번째 트레이딩 봇을 만들어 시작하세요
           </p>
           <Button
             variant="primary"
             onClick={() => setShowCreateModal(true)}
             leftIcon={<Plus className="h-4 w-4" />}
           >
-            Create Bot
+            봇 생성
           </Button>
         </div>
       ) : (
@@ -156,6 +157,7 @@ export default function BotsPage() {
               onStart={startBot}
               onStop={stopBot}
               onDelete={deleteBot}
+              onSettings={(b) => setSettingsBot(b)}
             />
           ))}
         </div>
@@ -165,10 +167,60 @@ export default function BotsPage() {
       <Modal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
-        title="Create New Bot"
+        title="새 봇 생성"
         size="lg"
       >
         <CreateBotForm onClose={() => setShowCreateModal(false)} />
+      </Modal>
+
+      {/* Settings modal */}
+      <Modal
+        isOpen={!!settingsBot}
+        onClose={() => setSettingsBot(null)}
+        title={`${settingsBot?.name ?? "봇"} 설정`}
+        size="lg"
+      >
+        {settingsBot && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-xs text-slate-400">전략</p>
+                <p className="text-sm font-medium text-white">{settingsBot.strategy}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-400">종목</p>
+                <p className="text-sm font-medium text-white">{settingsBot.symbol}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-400">거래소</p>
+                <p className="text-sm font-medium text-white">{settingsBot.exchange}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-400">모드</p>
+                <p className="text-sm font-medium text-white">{settingsBot.mode === "PAPER" ? "모의 투자" : "실전 투자"}</p>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 mb-2">설정 값</p>
+              <div className="rounded-lg bg-slate-800/30 p-3 space-y-1">
+                {Object.entries(settingsBot.config).map(([key, val]) => (
+                  <div key={key} className="flex justify-between text-sm">
+                    <span className="text-slate-400">{key}</span>
+                    <span className="text-white">{String(val)}</span>
+                  </div>
+                ))}
+                {Object.keys(settingsBot.config).length === 0 && (
+                  <p className="text-sm text-slate-500">설정 값이 없습니다</p>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" size="sm" onClick={() => setSettingsBot(null)}>
+                닫기
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

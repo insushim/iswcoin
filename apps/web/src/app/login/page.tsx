@@ -21,11 +21,11 @@ export default function LoginPage() {
     clearError();
 
     if (!email.trim()) {
-      setFormError("Email is required");
+      setFormError("이메일을 입력해주세요");
       return;
     }
     if (!password) {
-      setFormError("Password is required");
+      setFormError("비밀번호를 입력해주세요");
       return;
     }
 
@@ -49,7 +49,7 @@ export default function LoginPage() {
           </div>
           <h1 className="text-2xl font-bold text-white">CryptoSentinel Pro</h1>
           <p className="mt-2 text-sm text-slate-400">
-            Sign in to your trading dashboard
+            트레이딩 대시보드에 로그인하세요
           </p>
         </div>
 
@@ -63,7 +63,7 @@ export default function LoginPage() {
             )}
 
             <Input
-              label="Email"
+              label="이메일"
               type="email"
               placeholder="trader@example.com"
               value={email}
@@ -72,9 +72,9 @@ export default function LoginPage() {
             />
 
             <Input
-              label="Password"
+              label="비밀번호"
               type="password"
-              placeholder="Enter your password"
+              placeholder="비밀번호를 입력하세요"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
@@ -88,25 +88,25 @@ export default function LoginPage() {
               isLoading={isLoading}
               leftIcon={<LogIn className="h-4 w-4" />}
             >
-              Sign In
+              로그인
             </Button>
           </form>
 
           <div className="mt-6 text-center">
             <p className="text-sm text-slate-400">
-              Don&apos;t have an account?{" "}
+              계정이 없으신가요?{" "}
               <Link
                 href="/register"
                 className="font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
               >
-                Create one
+                회원가입
               </Link>
             </p>
           </div>
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-600">
-          By signing in, you agree to our Terms of Service and Privacy Policy
+          로그인 시 서비스 이용약관 및 개인정보 처리방침에 동의하게 됩니다
         </p>
       </div>
     </div>

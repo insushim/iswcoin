@@ -98,9 +98,25 @@ CREATE TABLE IF NOT EXISTS backtest_results (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS notification_settings (
+  id TEXT PRIMARY KEY,
+  user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  telegram_enabled INTEGER DEFAULT 0,
+  telegram_chat_id TEXT DEFAULT '',
+  notify_trades INTEGER DEFAULT 1,
+  notify_alerts INTEGER DEFAULT 1,
+  notify_daily_report INTEGER DEFAULT 1,
+  notify_regime_change INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(user_id);
 CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot_id);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_bots_user ON bots(user_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts(user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_user ON backtest_results(user_id);
+CREATE INDEX IF NOT EXISTS idx_notification_user ON notification_settings(user_id);

@@ -33,12 +33,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const res = await api.post(endpoints.auth.login, { email, password });
-      const { token, user } = res.data.data;
+      const data = res.data.data ?? res.data;
+      const { token, user } = data;
       localStorage.setItem("auth_token", token);
       localStorage.setItem("auth_user", JSON.stringify(user));
       set({ user, token, isAuthenticated: true, isLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Login failed";
+      const message = err instanceof Error ? err.message : "로그인에 실패했습니다";
       set({ error: message, isLoading: false });
       throw err;
     }
@@ -48,12 +49,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const res = await api.post(endpoints.auth.register, { name, email, password });
-      const { token, user } = res.data.data;
+      const data = res.data.data ?? res.data;
+      const { token, user } = data;
       localStorage.setItem("auth_token", token);
       localStorage.setItem("auth_user", JSON.stringify(user));
       set({ user, token, isAuthenticated: true, isLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Registration failed";
+      const message = err instanceof Error ? err.message : "회원가입에 실패했습니다";
       set({ error: message, isLoading: false });
       throw err;
     }
@@ -83,7 +85,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   fetchMe: async () => {
     try {
       const res = await api.get(endpoints.auth.me);
-      set({ user: res.data.data });
+      const data = res.data.data ?? res.data;
+      set({ user: data.user ?? data });
     } catch {
       get().logout();
     }

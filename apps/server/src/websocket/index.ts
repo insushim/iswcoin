@@ -3,6 +3,7 @@ import { Server, type Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/index.js';
 import { logger } from '../utils/logger.js';
+import { prisma } from '../db.js';
 import type { JWTPayload } from '../middleware/auth.js';
 
 let io: Server | null = null;
@@ -94,10 +95,25 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
 
     socket.join(`user:${user.userId}`);
 
-    socket.on('subscribe:bot', (botId: string) => {
-      if (typeof botId === 'string' && botId.length > 0) {
+    socket.on('subscribe:bot', async (botId: string) => {
+      if (typeof botId !== 'string' || botId.length === 0) return;
+
+      try {
+        const bot = await prisma.bot.findUnique({
+          where: { id: botId },
+          select: { userId: true },
+        });
+
+        if (!bot || bot.userId !== user.userId) {
+          socket.emit('error', { message: '봇에 대한 접근 권한이 없습니다' });
+          logger.warn('Unauthorized bot subscription attempt', { userId: user.userId, botId });
+          return;
+        }
+
         socket.join(`bot:${botId}`);
         logger.debug('Client subscribed to bot', { userId: user.userId, botId });
+      } catch (err) {
+        logger.error('Bot subscription check failed', { botId, error: String(err) });
       }
     });
 

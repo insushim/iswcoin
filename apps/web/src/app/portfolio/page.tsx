@@ -30,7 +30,7 @@ const DEMO_HISTORY = Array.from({ length: 60 }, (_, i) => ({
 }));
 
 export default function PortfolioPage() {
-  const { summary, history, fetchPortfolio, fetchHistory, fetchPositions } = usePortfolioStore();
+  const { summary, history, positions, fetchPortfolio, fetchHistory, fetchPositions } = usePortfolioStore();
 
   useEffect(() => {
     fetchPortfolio().catch(() => {});
@@ -39,12 +39,33 @@ export default function PortfolioPage() {
   }, [fetchPortfolio, fetchHistory, fetchPositions]);
 
   const totalValue = summary?.totalValue ?? 101160.15;
-  const totalPnL = summary?.totalPnL ?? 3652.14;
+  const totalPnL = Number((summary as unknown as Record<string, unknown>)?.totalPnL ?? (summary as unknown as Record<string, unknown>)?.totalPnl ?? 3652.14);
   const totalPnLPercent = summary?.totalPnLPercent ?? 3.75;
   const dailyPnL = summary?.dailyPnL ?? 342.50;
   const dailyPnLPercent = summary?.dailyPnLPercent ?? 0.34;
 
   const chartHistory = history.length > 0 ? history.map(h => ({ date: h.date, value: h.value })) : DEMO_HISTORY;
+
+  const displayPositions = positions.length > 0 ? positions.map((p) => {
+    const posValue = Number(p.currentPrice ?? 0) * Number(p.amount ?? 0);
+    const totalVal = totalValue || 1;
+    return {
+      symbol: p.symbol || "",
+      amount: Number(p.amount ?? 0),
+      entryPrice: Number(p.entryPrice ?? 0),
+      currentPrice: Number(p.currentPrice ?? 0),
+      pnl: Number(p.pnl ?? 0),
+      pnlPercent: Number(p.pnlPercent ?? 0),
+      allocation: Math.round((posValue / totalVal) * 1000) / 10,
+    };
+  }) : DEMO_POSITIONS;
+
+  const displayAllocation = displayPositions.length > 0 && positions.length > 0
+    ? displayPositions.map((p) => {
+        const colors: Record<string, string> = { BTC: "#f7931a", ETH: "#627eea", SOL: "#9945ff", BNB: "#f3ba2f", USDT: "#26a17b" };
+        return { name: p.symbol, value: p.currentPrice * p.amount, color: colors[p.symbol] || "#6366f1" };
+      })
+    : DEMO_ALLOCATION;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -56,7 +77,7 @@ export default function PortfolioPage() {
               <Wallet className="h-5 w-5 text-emerald-400" />
             </div>
             <div>
-              <p className="text-xs text-slate-400">Total Value</p>
+              <p className="text-xs text-slate-400">총 자산가치</p>
               <p className="text-xl font-bold text-white">{formatCurrency(totalValue)}</p>
             </div>
           </div>
@@ -67,7 +88,7 @@ export default function PortfolioPage() {
               {totalPnL >= 0 ? <TrendingUp className="h-5 w-5 text-emerald-400" /> : <TrendingDown className="h-5 w-5 text-red-400" />}
             </div>
             <div>
-              <p className="text-xs text-slate-400">Total PnL</p>
+              <p className="text-xs text-slate-400">총 손익</p>
               <p className={cn("text-xl font-bold", totalPnL >= 0 ? "text-emerald-400" : "text-red-400")}>
                 {totalPnL >= 0 ? "+" : ""}{formatCurrency(totalPnL)}
               </p>
@@ -83,7 +104,7 @@ export default function PortfolioPage() {
               <TrendingUp className={cn("h-5 w-5", dailyPnL >= 0 ? "text-blue-400" : "text-red-400")} />
             </div>
             <div>
-              <p className="text-xs text-slate-400">Daily PnL</p>
+              <p className="text-xs text-slate-400">일일 손익</p>
               <p className={cn("text-xl font-bold", dailyPnL >= 0 ? "text-blue-400" : "text-red-400")}>
                 {dailyPnL >= 0 ? "+" : ""}{formatCurrency(dailyPnL)}
               </p>
@@ -99,9 +120,9 @@ export default function PortfolioPage() {
               <PieChart className="h-5 w-5 text-purple-400" />
             </div>
             <div>
-              <p className="text-xs text-slate-400">Assets</p>
-              <p className="text-xl font-bold text-white">{DEMO_POSITIONS.length}</p>
-              <p className="text-xs text-slate-500">tokens in portfolio</p>
+              <p className="text-xs text-slate-400">보유 자산</p>
+              <p className="text-xl font-bold text-white">{displayPositions.length}</p>
+              <p className="text-xs text-slate-500">포트폴리오 내 토큰</p>
             </div>
           </div>
         </Card>
@@ -110,35 +131,35 @@ export default function PortfolioPage() {
       {/* Equity + Allocation */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader>Portfolio Value (60 days)</CardHeader>
+          <CardHeader>포트폴리오 가치 (60일)</CardHeader>
           <EquityCurve data={chartHistory} height={320} />
         </Card>
         <Card>
-          <CardHeader>Allocation</CardHeader>
-          <AllocationPieChart data={DEMO_ALLOCATION} height={280} />
+          <CardHeader>자산 배분</CardHeader>
+          <AllocationPieChart data={displayAllocation} height={280} />
         </Card>
       </div>
 
       {/* Positions table */}
       <Card padding="none">
         <div className="px-6 py-4 border-b border-slate-800">
-          <h3 className="text-lg font-semibold text-white">Positions</h3>
+          <h3 className="text-lg font-semibold text-white">보유 포지션</h3>
         </div>
         <div className="overflow-x-auto">
           <table className="data-table">
             <thead>
               <tr>
-                <th>Asset</th>
-                <th className="text-right">Amount</th>
-                <th className="text-right">Entry Price</th>
-                <th className="text-right">Current Price</th>
-                <th className="text-right">PnL</th>
-                <th className="text-right">Return</th>
-                <th className="text-right">Allocation</th>
+                <th>자산</th>
+                <th className="text-right">수량</th>
+                <th className="text-right">매입가</th>
+                <th className="text-right">현재가</th>
+                <th className="text-right">손익</th>
+                <th className="text-right">수익률</th>
+                <th className="text-right">비중</th>
               </tr>
             </thead>
             <tbody>
-              {DEMO_POSITIONS.map((pos) => (
+              {displayPositions.map((pos) => (
                 <tr key={pos.symbol}>
                   <td className="font-medium text-white">{pos.symbol}</td>
                   <td className="text-right">{pos.amount.toFixed(pos.amount >= 100 ? 2 : 4)}</td>

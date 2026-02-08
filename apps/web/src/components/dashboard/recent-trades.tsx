@@ -21,28 +21,28 @@ interface RecentTradesProps {
 export function RecentTrades({ trades }: RecentTradesProps) {
   return (
     <Card>
-      <CardHeader>Recent Trades</CardHeader>
+      <CardHeader>최근 거래</CardHeader>
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr className="border-b border-slate-800">
               <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                Time
+                시간
               </th>
               <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                Symbol
+                종목
               </th>
               <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                Side
+                구분
               </th>
               <th className="px-3 py-2 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
-                Price
+                가격
               </th>
               <th className="px-3 py-2 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
-                Amount
+                수량
               </th>
               <th className="px-3 py-2 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
-                PnL
+                손익
               </th>
             </tr>
           </thead>
@@ -50,7 +50,7 @@ export function RecentTrades({ trades }: RecentTradesProps) {
             {trades.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-3 py-8 text-center text-sm text-slate-500">
-                  No recent trades
+                  최근 거래 내역이 없습니다
                 </td>
               </tr>
             ) : (

@@ -1,6 +1,84 @@
 import ccxt, { type Exchange, type Ticker, type OHLCV, type OrderBook, type Order, type Balances } from 'ccxt';
 import { logger } from '../utils/logger.js';
 
+// ===== 서킷 브레이커 =====
+class CircuitBreaker {
+  private failures = 0;
+  private lastFailTime = 0;
+  private state: 'CLOSED' | 'OPEN' | 'HALF_OPEN' = 'CLOSED';
+
+  constructor(
+    private readonly name: string,
+    private readonly threshold: number = 5,
+    private readonly timeoutMs: number = 60000,
+    private readonly halfOpenMaxAttempts: number = 2
+  ) {}
+
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.state === 'OPEN') {
+      const elapsed = Date.now() - this.lastFailTime;
+      if (elapsed >= this.timeoutMs) {
+        this.state = 'HALF_OPEN';
+        logger.info(`Circuit breaker ${this.name}: OPEN → HALF_OPEN`);
+      } else {
+        throw new Error(`Circuit breaker ${this.name} is OPEN (${Math.ceil((this.timeoutMs - elapsed) / 1000)}s remaining)`);
+      }
+    }
+
+    try {
+      const result = await fn();
+      this.onSuccess();
+      return result;
+    } catch (err) {
+      this.onFailure();
+      throw err;
+    }
+  }
+
+  private onSuccess(): void {
+    if (this.state === 'HALF_OPEN') {
+      logger.info(`Circuit breaker ${this.name}: HALF_OPEN → CLOSED`);
+    }
+    this.failures = 0;
+    this.state = 'CLOSED';
+  }
+
+  private onFailure(): void {
+    this.failures++;
+    this.lastFailTime = Date.now();
+
+    if (this.failures >= this.threshold) {
+      this.state = 'OPEN';
+      logger.warn(`Circuit breaker ${this.name}: OPEN after ${this.failures} failures`);
+    }
+  }
+
+  getState(): string {
+    return this.state;
+  }
+}
+
+// ===== 재시도 유틸리티 =====
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  delayMs: number = 1000
+): Promise<T> {
+  let lastError: Error | undefined;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxRetries) {
+        const backoff = delayMs * Math.pow(2, attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+      }
+    }
+  }
+  throw lastError;
+}
+
 interface PaperPosition {
   symbol: string;
   side: 'long' | 'short';
@@ -151,9 +229,33 @@ export type SupportedExchange = 'binance' | 'upbit' | 'bybit' | 'bithumb';
 export class ExchangeService {
   private exchanges: Map<string, Exchange> = new Map();
   private paperExchanges: Map<string, PaperExchange> = new Map();
+  private circuitBreakers: Map<string, CircuitBreaker> = new Map();
+  private cache: Map<string, { data: unknown; expiry: number }> = new Map();
+
+  private getCircuitBreaker(name: string): CircuitBreaker {
+    let cb = this.circuitBreakers.get(name);
+    if (!cb) {
+      cb = new CircuitBreaker(name);
+      this.circuitBreakers.set(name, cb);
+    }
+    return cb;
+  }
+
+  private getCached<T>(key: string): T | null {
+    const entry = this.cache.get(key);
+    if (entry && Date.now() < entry.expiry) {
+      return entry.data as T;
+    }
+    if (entry) this.cache.delete(key);
+    return null;
+  }
+
+  private setCache(key: string, data: unknown, ttlMs: number): void {
+    this.cache.set(key, { data, expiry: Date.now() + ttlMs });
+  }
 
   initExchange(exchangeName: SupportedExchange, apiKey: string, apiSecret: string): Exchange {
-    const key = `${exchangeName}:${apiKey.slice(0, 8)}`;
+    const key = `${exchangeName}:${apiKey.slice(0, 4)}****`;
 
     if (this.exchanges.has(key)) {
       return this.exchanges.get(key)!;
@@ -193,13 +295,19 @@ export class ExchangeService {
   }
 
   async getTicker(exchange: Exchange, symbol: string): Promise<Ticker> {
-    try {
-      const ticker = await exchange.fetchTicker(symbol);
-      return ticker;
-    } catch (err) {
-      logger.error('Failed to fetch ticker', { symbol, error: String(err) });
-      throw err;
-    }
+    // 5초 캐시
+    const cacheKey = `ticker:${symbol}`;
+    const cached = this.getCached<Ticker>(cacheKey);
+    if (cached) return cached;
+
+    const cb = this.getCircuitBreaker(`ticker:${exchange.id ?? 'default'}`);
+
+    const ticker = await cb.execute(() =>
+      withRetry(() => exchange.fetchTicker(symbol), 2, 500)
+    );
+
+    this.setCache(cacheKey, ticker, 5000);
+    return ticker;
   }
 
   async getOHLCV(
@@ -208,23 +316,35 @@ export class ExchangeService {
     timeframe: string = '1h',
     limit: number = 100
   ): Promise<OHLCV[]> {
-    try {
-      const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, limit);
-      return ohlcv;
-    } catch (err) {
-      logger.error('Failed to fetch OHLCV', { symbol, timeframe, error: String(err) });
-      throw err;
-    }
+    // 30초 캐시
+    const cacheKey = `ohlcv:${symbol}:${timeframe}:${limit}`;
+    const cached = this.getCached<OHLCV[]>(cacheKey);
+    if (cached) return cached;
+
+    const cb = this.getCircuitBreaker(`ohlcv:${exchange.id ?? 'default'}`);
+
+    const ohlcv = await cb.execute(() =>
+      withRetry(() => exchange.fetchOHLCV(symbol, timeframe, undefined, limit), 2, 1000)
+    );
+
+    this.setCache(cacheKey, ohlcv, 30000);
+    return ohlcv;
   }
 
   async getOrderBook(exchange: Exchange, symbol: string, limit: number = 20): Promise<OrderBook> {
-    try {
-      const orderbook = await exchange.fetchOrderBook(symbol, limit);
-      return orderbook;
-    } catch (err) {
-      logger.error('Failed to fetch order book', { symbol, error: String(err) });
-      throw err;
-    }
+    // 2초 캐시
+    const cacheKey = `orderbook:${symbol}:${limit}`;
+    const cached = this.getCached<OrderBook>(cacheKey);
+    if (cached) return cached;
+
+    const cb = this.getCircuitBreaker(`orderbook:${exchange.id ?? 'default'}`);
+
+    const orderbook = await cb.execute(() =>
+      withRetry(() => exchange.fetchOrderBook(symbol, limit), 2, 500)
+    );
+
+    this.setCache(cacheKey, orderbook, 2000);
+    return orderbook;
   }
 
   async createOrder(
