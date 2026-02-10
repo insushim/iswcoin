@@ -11,6 +11,9 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 export const metadata: Metadata = {
   title: "CryptoSentinel Pro - AI 트레이딩 대시보드",
   description: "AI 기반 실시간 암호화폐 자동매매 시스템",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

@@ -77,10 +77,10 @@ export default function MarketPage() {
 
   const demoSentiment = sentiment || {
     fearGreedIndex: 62,
-    fearGreedLabel: "Greed",
+    fearGreedLabel: "탐욕",
     socialScore: 72,
     newsScore: 58,
-    whaleActivity: "Accumulating",
+    whaleActivity: "축적 중",
     timestamp: Date.now(),
   };
 
@@ -148,7 +148,7 @@ export default function MarketPage() {
                 {demoIndicators.macd.histogram.toFixed(1)}
               </p>
               <p className="text-xs text-slate-500">
-                Signal: {demoIndicators.macd.signal.toFixed(1)}
+                시그널: {demoIndicators.macd.signal.toFixed(1)}
               </p>
             </div>
 

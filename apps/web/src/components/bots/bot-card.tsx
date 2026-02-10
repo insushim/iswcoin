@@ -45,7 +45,7 @@ export function BotCard({ bot, onStart, onStop, onDelete, onSettings }: BotCardP
           </p>
         </div>
         <Badge variant={getBotStatusVariant(bot.status)} dot>
-          {bot.status}
+          {bot.status === BotStatus.RUNNING ? "실행중" : bot.status === BotStatus.STOPPED ? "중지" : bot.status === BotStatus.ERROR ? "오류" : "대기"}
         </Badge>
       </div>
 

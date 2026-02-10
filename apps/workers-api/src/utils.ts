@@ -2,6 +2,13 @@ export function generateId(): string {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 25);
 }
 
+// Explicit UTF-8 JSON parsing to prevent Korean/CJK character corruption
+export async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
+  const buffer = await req.arrayBuffer();
+  const text = new TextDecoder('utf-8').decode(buffer);
+  return JSON.parse(text);
+}
+
 export async function hashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password);

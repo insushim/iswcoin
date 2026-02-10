@@ -238,10 +238,10 @@ export default function TradesPage() {
                             : "bg-red-500/15 text-red-400"
                         )}
                       >
-                        {trade.side}
+                        {trade.side === "BUY" ? "매수" : "매도"}
                       </span>
                     </td>
-                    <td className="text-slate-400">{trade.type}</td>
+                    <td className="text-slate-400">{trade.type === "LIMIT" ? "지정가" : "시장가"}</td>
                     <td className="text-right">{formatCurrency(trade.price)}</td>
                     <td className="text-right">{trade.amount.toFixed(4)}</td>
                     <td className="text-right">{formatCurrency(trade.total)}</td>

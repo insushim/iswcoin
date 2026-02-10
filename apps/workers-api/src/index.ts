@@ -9,6 +9,7 @@ import { backtestRoutes } from './routes/backtest';
 import { regimeRoutes } from './routes/regime';
 import { settingsRoutes } from './routes/settings';
 import { verifyJWT } from './utils';
+import { runPaperTrading } from './engine';
 
 export type Env = {
   DB: D1Database;
@@ -31,7 +32,7 @@ app.use('/api/*', async (c, next) => {
   const path = c.req.path;
 
   // Skip auth for health and auth endpoints
-  if (path === '/api/health' || path.startsWith('/api/auth')) {
+  if (path === '/api/health' || path.startsWith('/api/auth') || path === '/api/engine/run') {
     return next();
   }
 
@@ -53,6 +54,17 @@ app.use('/api/*', async (c, next) => {
 
 app.get('/api/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString(), runtime: 'cloudflare-workers' }));
 
+// Manual trigger for paper trading engine (for testing)
+app.post('/api/engine/run', async (c) => {
+  try {
+    const logs = await runPaperTrading(c.env);
+    return c.json({ data: { success: true, message: '모의투자 엔진 실행 완료', timestamp: new Date().toISOString(), logs } });
+  } catch (err) {
+    console.error('Engine error:', err);
+    return c.json({ error: '엔진 실행 중 오류 발생', details: String(err) }, 500);
+  }
+});
+
 app.route('/api/auth', authRoutes);
 app.route('/api/bots', botRoutes);
 app.route('/api/trades', tradeRoutes);
@@ -68,4 +80,10 @@ app.onError((err, c) => {
   return c.json({ error: 'Internal server error' }, 500);
 });
 
-export default app;
+// Export with scheduled handler for cron-based paper trading
+export default {
+  fetch: app.fetch,
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(runPaperTrading(env));
+  },
+};

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId } from '../utils';
+import { generateId, parseJsonBody } from '../utils';
 
 type BotEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -81,7 +81,7 @@ botRoutes.get('/:id', async (c) => {
 // POST / - Create new bot
 botRoutes.post('/', async (c) => {
   const userId = c.get('userId');
-  const body = await c.req.json();
+  const body = await parseJsonBody(c.req.raw);
   const id = generateId();
 
   const config = { ...(body.config || {}), mode: body.mode || 'PAPER' };
@@ -106,7 +106,7 @@ botRoutes.post('/', async (c) => {
 botRoutes.put('/:id', async (c) => {
   const userId = c.get('userId');
   const id = c.req.param('id');
-  const body = await c.req.json();
+  const body = await parseJsonBody(c.req.raw);
 
   const existing = await c.env.DB.prepare(
     'SELECT id FROM bots WHERE id = ? AND user_id = ?'
@@ -186,7 +186,7 @@ botRoutes.post('/:id/stop', async (c) => {
 botRoutes.patch('/:id/status', async (c) => {
   const userId = c.get('userId');
   const id = c.req.param('id');
-  const { status } = await c.req.json();
+  const { status } = await parseJsonBody(c.req.raw) as { status: string };
 
   const existing = await c.env.DB.prepare(
     'SELECT id FROM bots WHERE id = ? AND user_id = ?'

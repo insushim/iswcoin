@@ -17,14 +17,14 @@ const COIN_COLORS: Record<string, string> = {
 };
 
 const COIN_NAMES: Record<string, string> = {
-  BTCUSDT: "Bitcoin",
-  ETHUSDT: "Ethereum",
+  BTCUSDT: "비트코인",
+  ETHUSDT: "이더리움",
   BNBUSDT: "BNB",
-  SOLUSDT: "Solana",
+  SOLUSDT: "솔라나",
   XRPUSDT: "XRP",
-  ADAUSDT: "Cardano",
-  DOTUSDT: "Polkadot",
-  AVAXUSDT: "Avalanche",
+  ADAUSDT: "카르다노",
+  DOTUSDT: "폴카닷",
+  AVAXUSDT: "아발란체",
 };
 
 export function MarketOverview({ tickers }: MarketOverviewProps) {
@@ -59,7 +59,7 @@ export function MarketOverview({ tickers }: MarketOverviewProps) {
               {formatCurrency(ticker.price, "USD", ticker.price < 1 ? 4 : 2)}
             </p>
             <p className="text-xs text-slate-500 mt-1">
-              Vol: {formatNumber(ticker.volume24h)}
+              거래량: {formatNumber(ticker.volume24h)}
             </p>
             {/* Mini sparkline placeholder */}
             <div className="mt-2 flex items-end gap-px h-6">

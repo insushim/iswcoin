@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId, hashPassword, verifyPassword } from '../utils';
+import { generateId, hashPassword, verifyPassword, parseJsonBody } from '../utils';
 
 type SettingsEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -37,7 +37,7 @@ settingsRoutes.get('/api-keys', async (c) => {
 // POST /api-keys - Add new API key
 settingsRoutes.post('/api-keys', async (c) => {
   const userId = c.get('userId');
-  const body = await c.req.json();
+  const body = await parseJsonBody(c.req.raw);
 
   const { exchange, apiKey, secretKey, passphrase, label } = body;
 
@@ -126,7 +126,7 @@ settingsRoutes.get('/notifications', async (c) => {
 // PUT /notifications - Update notification settings
 settingsRoutes.put('/notifications', async (c) => {
   const userId = c.get('userId');
-  const body = await c.req.json();
+  const body = await parseJsonBody(c.req.raw);
 
   const {
     telegramEnabled = false,
@@ -187,7 +187,7 @@ settingsRoutes.put('/notifications', async (c) => {
 // PUT /profile - Update user profile
 settingsRoutes.put('/profile', async (c) => {
   const userId = c.get('userId');
-  const body = await c.req.json();
+  const body = await parseJsonBody(c.req.raw);
 
   const updates: string[] = [];
   const values: unknown[] = [];
@@ -225,7 +225,7 @@ settingsRoutes.put('/profile', async (c) => {
 // PUT /password - Change password
 settingsRoutes.put('/password', async (c) => {
   const userId = c.get('userId');
-  const body = await c.req.json();
+  const body = await parseJsonBody(c.req.raw);
 
   const { currentPassword, newPassword } = body;
   if (!currentPassword || !newPassword) {

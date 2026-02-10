@@ -9,7 +9,7 @@ import { EquityCurve } from "@/components/charts/equity-curve";
 import { BotConfig, getDefaultConfig } from "@/components/bots/bot-config";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
 import { StrategyType } from "@cryptosentinel/shared";
-import { Play, BarChart3, TrendingUp, Target, AlertTriangle } from "lucide-react";
+import { Play, BarChart3, TrendingUp, Target, AlertTriangle, Database, Info } from "lucide-react";
 import api, { endpoints } from "@/lib/api";
 import type { BacktestResult } from "@cryptosentinel/shared";
 
@@ -25,31 +25,23 @@ const STRATEGY_OPTIONS = Object.values(StrategyType).map((v) => ({
   value: v,
 }));
 
-// Demo result for display
-const DEMO_RESULT: BacktestResult = {
-  totalReturn: 23.45,
-  sharpeRatio: 1.87,
-  maxDrawdown: -8.32,
-  winRate: 62.5,
-  totalTrades: 156,
-  profitFactor: 1.95,
-  equityCurve: Array.from({ length: 90 }, (_, i) => ({
-    date: new Date(Date.now() - (89 - i) * 86400000).toISOString(),
-    value: 10000 + i * 26 + Math.random() * 500 - 200,
-  })),
-  trades: Array.from({ length: 20 }, (_, i) => ({
-    date: new Date(Date.now() - (19 - i) * 86400000 * 4.5).toISOString(),
-    side: Math.random() > 0.5 ? "BUY" : "SELL",
-    price: 95000 + Math.random() * 5000,
-    pnl: (Math.random() - 0.35) * 300,
-  })),
-};
+// 기본 날짜: 최근 3개월 (CoinGecko 무료 API 1년 한도 이내)
+function getDefaultDates() {
+  const end = new Date();
+  const start = new Date();
+  start.setMonth(start.getMonth() - 3);
+  return {
+    start: start.toISOString().split("T")[0],
+    end: end.toISOString().split("T")[0],
+  };
+}
 
 export default function BacktestPage() {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [strategy, setStrategy] = useState<StrategyType>(StrategyType.MOMENTUM);
-  const [startDate, setStartDate] = useState("2024-10-01");
-  const [endDate, setEndDate] = useState("2025-01-20");
+  const [defaultDates] = useState(getDefaultDates);
+  const [startDate, setStartDate] = useState(defaultDates.start);
+  const [endDate, setEndDate] = useState(defaultDates.end);
   const [initialCapital, setInitialCapital] = useState("10000");
   const [config, setConfig] = useState<Record<string, number | string | boolean>>(
     getDefaultConfig(StrategyType.MOMENTUM)
@@ -81,10 +73,16 @@ export default function BacktestPage() {
         initialCapital: parseFloat(initialCapital),
         params: numericParams,
       });
-      setResult(res.data.data);
-    } catch {
-      // Use demo result on API failure
-      setResult(DEMO_RESULT);
+      if (res.data.error) {
+        setError(res.data.error);
+        setResult(null);
+      } else {
+        setResult(res.data.data);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "백테스트 실행 중 오류가 발생했습니다.";
+      setError(msg);
+      setResult(null);
     } finally {
       setIsRunning(false);
     }
@@ -218,6 +216,29 @@ export default function BacktestPage() {
             ))}
           </div>
 
+          {/* Data source & price range info */}
+          {(result.dataSource || result.priceRange) && (
+            <Card>
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                {result.dataSource && (
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <Database className="h-4 w-4 text-blue-400" />
+                    <span>데이터: <span className="font-medium text-blue-400">{result.dataSource}</span></span>
+                  </div>
+                )}
+                {result.priceRange && (
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <Info className="h-4 w-4 text-slate-400" />
+                    <span>
+                      시작가 {formatCurrency(result.priceRange.start)} → 종가 {formatCurrency(result.priceRange.end)}
+                      {" "}(최고 {formatCurrency(result.priceRange.high)} / 최저 {formatCurrency(result.priceRange.low)})
+                    </span>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+
           {/* Equity curve */}
           <Card>
             <CardHeader>자산 곡선</CardHeader>
@@ -236,7 +257,9 @@ export default function BacktestPage() {
                     <th>날짜</th>
                     <th>구분</th>
                     <th className="text-right">가격</th>
+                    <th className="text-right">수량</th>
                     <th className="text-right">손익</th>
+                    <th>사유</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -254,10 +277,13 @@ export default function BacktestPage() {
                               : "bg-red-500/15 text-red-400"
                           )}
                         >
-                          {trade.side}
+                          {trade.side === "BUY" ? "매수" : "매도"}
                         </span>
                       </td>
                       <td className="text-right">{formatCurrency(trade.price)}</td>
+                      <td className="text-right text-xs text-slate-400">
+                        {trade.quantity ? trade.quantity.toFixed(6) : "-"}
+                      </td>
                       <td
                         className={cn(
                           "text-right font-medium",
@@ -266,6 +292,9 @@ export default function BacktestPage() {
                       >
                         {trade.pnl >= 0 ? "+" : ""}
                         {formatCurrency(trade.pnl)}
+                      </td>
+                      <td className="text-xs text-slate-400 max-w-[200px] truncate">
+                        {trade.reason || "-"}
                       </td>
                     </tr>
                   ))}

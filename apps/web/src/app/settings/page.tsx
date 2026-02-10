@@ -37,7 +37,7 @@ const DEMO_API_KEYS: ApiKeyEntry[] = [
   {
     id: "1",
     exchange: Exchange.BINANCE,
-    label: "Main Trading",
+    label: "메인 트레이딩",
     keyPreview: "sk-...x3f2",
     createdAt: "2025-01-10",
     isActive: true,
@@ -45,7 +45,7 @@ const DEMO_API_KEYS: ApiKeyEntry[] = [
   {
     id: "2",
     exchange: Exchange.BYBIT,
-    label: "Backup",
+    label: "백업",
     keyPreview: "by-...a9d1",
     createdAt: "2025-01-15",
     isActive: false,

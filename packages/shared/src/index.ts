@@ -145,7 +145,9 @@ export interface BacktestResult {
   totalTrades: number;
   profitFactor: number;
   equityCurve: { date: string; value: number }[];
-  trades: { date: string; side: string; price: number; pnl: number }[];
+  trades: { date: string; side: string; price: number; quantity?: number; pnl: number; reason?: string }[];
+  dataSource?: string;
+  priceRange?: { start: number; end: number; high: number; low: number };
 }
 
 export interface SentimentData {

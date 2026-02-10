@@ -1,13 +1,13 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId, hashPassword, verifyPassword, createJWT } from '../utils';
+import { generateId, hashPassword, verifyPassword, createJWT, parseJsonBody } from '../utils';
 
 type AuthEnv = { Bindings: Env; Variables: AppVariables };
 
 export const authRoutes = new Hono<AuthEnv>();
 
 authRoutes.post('/register', async (c) => {
-  const { email, password, name } = await c.req.json();
+  const { email, password, name } = await parseJsonBody(c.req.raw) as { email: string; password: string; name?: string };
   if (!email || !password) return c.json({ error: 'Email and password required' }, 400);
 
   const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
@@ -27,7 +27,7 @@ authRoutes.post('/register', async (c) => {
 });
 
 authRoutes.post('/login', async (c) => {
-  const { email, password } = await c.req.json();
+  const { email, password } = await parseJsonBody(c.req.raw) as { email: string; password: string };
   if (!email || !password) return c.json({ error: 'Email and password required' }, 400);
 
   const user = await c.env.DB.prepare('SELECT id, email, name, password_hash FROM users WHERE email = ?').bind(email).first<{ id: string; email: string; name: string; password_hash: string }>();

@@ -74,7 +74,7 @@ export function RecentTrades({ trades }: RecentTradesProps) {
                           : "bg-red-500/15 text-red-400"
                       )}
                     >
-                      {trade.side}
+                      {trade.side === OrderSide.BUY ? "매수" : "매도"}
                     </span>
                   </td>
                   <td className="px-3 py-3 text-right text-sm text-slate-300">
