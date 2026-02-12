@@ -52,17 +52,17 @@ export class NotificationService {
 
   async sendAlert(
     userId: string,
-    type: string,
+    type: 'PRICE' | 'TRADE' | 'RISK' | 'ANOMALY' | 'SYSTEM',
     message: string,
-    severity: string = 'MEDIUM'
+    severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'MEDIUM'
   ): Promise<void> {
     try {
       await prisma.alert.create({
         data: {
           userId,
-          type: type as any,
+          type,
           message,
-          severity: severity as any,
+          severity,
         },
       });
 

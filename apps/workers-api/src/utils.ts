@@ -59,6 +59,49 @@ export async function createJWT(payload: Record<string, unknown>, secret: string
   return `${header}.${body}.${sig}`;
 }
 
+// AES-GCM 암호화 (Workers 환경용 Web Crypto API)
+export async function encryptApiKey(plaintext: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(secret), 'PBKDF2', false, ['deriveKey']);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(plaintext));
+  // Format: aes-gcm:base64(salt):base64(iv):base64(encrypted)
+  const saltB64 = btoa(String.fromCharCode(...salt));
+  const ivB64 = btoa(String.fromCharCode(...iv));
+  const encB64 = btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+  return `aes-gcm:${saltB64}:${ivB64}:${encB64}`;
+}
+
+export async function decryptApiKey(ciphertext: string, secret: string): Promise<string> {
+  if (!ciphertext.startsWith('aes-gcm:')) {
+    // Legacy plaintext - return as-is for backward compatibility
+    return ciphertext;
+  }
+  const [, saltB64, ivB64, encB64] = ciphertext.split(':');
+  const salt = Uint8Array.from(atob(saltB64!), c => c.charCodeAt(0));
+  const iv = Uint8Array.from(atob(ivB64!), c => c.charCodeAt(0));
+  const encrypted = Uint8Array.from(atob(encB64!), c => c.charCodeAt(0));
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(secret), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt']
+  );
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, encrypted);
+  return new TextDecoder().decode(decrypted);
+}
+
 export async function verifyJWT(token: string, secret: string): Promise<Record<string, unknown> | null> {
   try {
     const parts = token.split('.');

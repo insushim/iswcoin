@@ -16,6 +16,7 @@ export type Env = {
   JWT_SECRET: string;
   CORS_ORIGIN: string;
   ENGINE_SECRET?: string;
+  ENCRYPTION_SECRET?: string;
 };
 
 export type AppVariables = {

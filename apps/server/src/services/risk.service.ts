@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js';
 import { prisma } from '../db.js';
+import { getDateRanges } from '../utils/date.js';
 
 export interface RiskConfig {
   maxTradeRiskPercent: number;
@@ -129,43 +130,37 @@ export class RiskManager {
   }
 
   async checkRiskLimits(botId: string): Promise<RiskCheckResult> {
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startOfWeek = new Date(startOfDay);
-    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+    const { startOfDay, startOfWeek } = getDateRanges();
 
     const bot = await prisma.bot.findUnique({
       where: { id: botId },
-      include: { user: true },
+      select: { userId: true },
     });
 
     if (!bot) {
       return { allowed: false, reason: 'Bot not found', currentDailyLoss: 0, currentWeeklyLoss: 0 };
     }
 
-    const portfolio = await prisma.portfolio.findFirst({
-      where: { userId: bot.userId },
-      orderBy: { updatedAt: 'desc' },
-    });
+    // 병렬 집계 쿼리 (findMany → aggregate)
+    const [portfolio, dailyAgg, weeklyAgg] = await Promise.all([
+      prisma.portfolio.findFirst({
+        where: { userId: bot.userId },
+        orderBy: { updatedAt: 'desc' },
+        select: { totalValue: true },
+      }),
+      prisma.trade.aggregate({
+        where: { botId, timestamp: { gte: startOfDay } },
+        _sum: { pnl: true },
+      }),
+      prisma.trade.aggregate({
+        where: { botId, timestamp: { gte: startOfWeek } },
+        _sum: { pnl: true },
+      }),
+    ]);
 
     const totalCapital = portfolio?.totalValue ?? 10000;
-
-    const dailyTrades = await prisma.trade.findMany({
-      where: {
-        botId,
-        timestamp: { gte: startOfDay },
-      },
-    });
-
-    const weeklyTrades = await prisma.trade.findMany({
-      where: {
-        botId,
-        timestamp: { gte: startOfWeek },
-      },
-    });
-
-    const dailyPnL = dailyTrades.reduce((sum: number, t: any) => sum + (t.pnl ?? 0), 0);
-    const weeklyPnL = weeklyTrades.reduce((sum: number, t: any) => sum + (t.pnl ?? 0), 0);
+    const dailyPnL = dailyAgg._sum.pnl ?? 0;
+    const weeklyPnL = weeklyAgg._sum.pnl ?? 0;
 
     const dailyLossPercent = totalCapital > 0 ? (Math.abs(Math.min(0, dailyPnL)) / totalCapital) * 100 : 0;
     const weeklyLossPercent = totalCapital > 0 ? (Math.abs(Math.min(0, weeklyPnL)) / totalCapital) * 100 : 0;

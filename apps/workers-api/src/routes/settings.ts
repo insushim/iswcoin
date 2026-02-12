@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId, hashPassword, verifyPassword, parseJsonBody } from '../utils';
+import { generateId, hashPassword, verifyPassword, parseJsonBody, encryptApiKey } from '../utils';
 
 type SettingsEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -50,11 +50,14 @@ settingsRoutes.post('/api-keys', async (c) => {
   }
 
   const id = generateId();
+  const encryptionSecret = c.env.ENCRYPTION_SECRET || 'default-encryption-key';
+  const encryptedApiKey = await encryptApiKey(apiKey, encryptionSecret);
+  const encryptedSecretKey = await encryptApiKey(secretKey, encryptionSecret);
 
   await c.env.DB.prepare(
     'INSERT INTO api_keys (id, user_id, exchange, api_key, secret_key, passphrase, label) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).bind(
-    id, userId, exchange, apiKey, secretKey,
+    id, userId, exchange, encryptedApiKey, encryptedSecretKey,
     passphrase || null, label || null
   ).run();
 

@@ -7,6 +7,7 @@ import { env } from './config/index.js';
 import { logger } from './utils/logger.js';
 import { initializeWebSocket, getConnectedClientsCount } from './websocket/index.js';
 import { startScheduler } from './jobs/scheduler.js';
+import { botRunnerService } from './services/bot-runner.service.js';
 
 import authRoutes from './routes/auth.routes.js';
 import botsRoutes from './routes/bots.routes.js';
@@ -142,6 +143,9 @@ initializeWebSocket(httpServer);
 
 startScheduler();
 
+// 서버 재시작 시 RUNNING 상태로 남은 봇 복구
+botRunnerService.recoverStuckBots();
+
 const PORT = env.SERVER_PORT;
 
 httpServer.listen(PORT, () => {
@@ -167,6 +171,7 @@ async function gracefulShutdown(signal: string) {
   logger.info(`${signal} received, shutting down gracefully`);
   httpServer.close(async () => {
     try {
+      botRunnerService.stopAllBots();
       const { prisma } = await import('./db.js');
       await prisma.$disconnect();
       logger.info('Database disconnected');

@@ -38,10 +38,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    fetchBots().catch(() => {});
-    fetchPortfolio().catch(() => {});
-    fetchHistory(30).catch(() => {});
-    fetchTickers().catch(() => {});
+    fetchBots().catch((e) => console.error('Failed to fetch bots:', e));
+    fetchPortfolio().catch((e) => console.error('Failed to fetch portfolio:', e));
+    fetchHistory(30).catch((e) => console.error('Failed to fetch history:', e));
+    fetchTickers().catch((e) => console.error('Failed to fetch tickers:', e));
 
     // Fetch recent trades
     api.get(endpoints.trades.list, { params: { limit: 10 } })
@@ -59,7 +59,7 @@ export default function DashboardPage() {
           })));
         }
       })
-      .catch(() => {});
+      .catch((e) => console.error('Failed to fetch trades:', e));
 
     // Fetch sentiment
     api.get(endpoints.market.sentiment)
@@ -69,7 +69,7 @@ export default function DashboardPage() {
           setSentimentScore(Number(data.fearGreedIndex));
         }
       })
-      .catch(() => {});
+      .catch((e) => console.error('Failed to fetch sentiment:', e));
   }, [isAuthenticated, fetchBots, fetchPortfolio, fetchHistory, fetchTickers]);
 
   const activeBotCount = bots.filter((b) => b.status === BotStatus.RUNNING).length;

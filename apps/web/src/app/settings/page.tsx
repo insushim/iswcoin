@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -104,10 +104,19 @@ export default function SettingsPage() {
     loadSettings();
   }, [loadSettings]);
 
-  const showSaveMessage = (msg: string) => {
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showSaveMessage = useCallback((msg: string) => {
     setSaveStatus(msg);
-    setTimeout(() => setSaveStatus(null), 3000);
-  };
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => setSaveStatus(null), 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, []);
 
   const handleSaveProfile = async () => {
     try {

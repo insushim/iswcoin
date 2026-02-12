@@ -2,6 +2,7 @@ import { Router, type Response } from 'express';
 import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
+import { getDateRanges } from '../utils/date.js';
 
 const router = Router();
 
@@ -31,11 +32,7 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response): Promise
 
     const botIds = bots.map((b) => b.id);
 
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startOfWeek = new Date(startOfDay);
-    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const { startOfDay, startOfWeek, startOfMonth } = getDateRanges();
 
     // DB 집계로 최적화 (전체 trades를 메모리에 로드하지 않음)
     const [dailyAgg, weeklyAgg, monthlyAgg, totalAgg] = await Promise.all([

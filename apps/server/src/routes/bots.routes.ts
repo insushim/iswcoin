@@ -4,13 +4,9 @@ import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 import { getStrategy, type StrategyType } from '../strategies/index.js';
-import { exchangeService } from '../services/exchange.service.js';
-import { indicatorsService } from '../services/indicators.service.js';
-import { decrypt } from '../utils/encryption.js';
+import { botRunnerService } from '../services/bot-runner.service.js';
 
 const router = Router();
-
-const activeBots: Map<string, NodeJS.Timeout> = new Map();
 
 const createBotSchema = z.object({
   name: z.string().min(1).max(100),
@@ -202,7 +198,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response): Promise<
     }
 
     if (bot.status === 'RUNNING') {
-      stopBotLoop(botId);
+      botRunnerService.stopBotLoop(botId);
     }
 
     await prisma.bot.delete({ where: { id: botId } });
@@ -252,7 +248,7 @@ router.post('/:id/start', async (req: AuthenticatedRequest, res: Response): Prom
       data: { status: 'RUNNING' },
     });
 
-    startBotLoop(botId, bot.strategy as StrategyType, bot.symbol, bot.exchange, bot.mode, bot.config as Record<string, number>, userId);
+    botRunnerService.startBotLoop(botId, bot.strategy as StrategyType, bot.symbol, bot.exchange, bot.mode, bot.config as Record<string, number>, userId);
 
     await prisma.botLog.create({
       data: {
@@ -289,7 +285,7 @@ router.post('/:id/stop', async (req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    stopBotLoop(botId);
+    botRunnerService.stopBotLoop(botId);
 
     await prisma.bot.update({
       where: { id: botId },
@@ -311,136 +307,5 @@ router.post('/:id/stop', async (req: AuthenticatedRequest, res: Response): Promi
     res.status(500).json({ error: 'Failed to stop bot' });
   }
 });
-
-async function startBotLoop(
-  botId: string,
-  strategyType: StrategyType,
-  symbol: string,
-  exchangeEnum: string,
-  mode: string,
-  config: Record<string, number>,
-  userId: string
-): Promise<void> {
-  const strategy = getStrategy(strategyType, config);
-  const exchangeName = exchangeService.getExchangeNameFromEnum(exchangeEnum);
-
-  if (mode === 'PAPER') {
-    exchangeService.initPaperExchange(exchangeName, 10000);
-  }
-
-  // API 키를 시작 시 한 번만 조회하여 캐싱 (매 루프 DB 쿼리 방지)
-  let cachedExchange: ReturnType<typeof exchangeService.initExchange> | null = null;
-
-  if (mode === 'REAL') {
-    const apiKeyRecord = await prisma.apiKey.findFirst({
-      where: { userId, exchange: exchangeEnum as 'BINANCE' | 'UPBIT' | 'BYBIT' | 'BITHUMB', isActive: true },
-    });
-    if (apiKeyRecord) {
-      cachedExchange = exchangeService.initExchange(
-        exchangeName,
-        decrypt(apiKeyRecord.apiKey),
-        decrypt(apiKeyRecord.apiSecret)
-      );
-    }
-  }
-
-  const interval = setInterval(async () => {
-    try {
-      const exchange = cachedExchange;
-      if (mode === 'REAL' && !exchange) {
-        logger.warn('No API key found for running bot', { botId });
-        return;
-      }
-
-      let ohlcvRaw: number[][] = [];
-      if (exchange) {
-        const data = await exchangeService.getOHLCV(exchange, symbol, '1h', 100);
-        ohlcvRaw = data.map((c) => [c[0] ?? 0, c[1] ?? 0, c[2] ?? 0, c[3] ?? 0, c[4] ?? 0, c[5] ?? 0]);
-      }
-
-      if (ohlcvRaw.length === 0) {
-        return;
-      }
-
-      const ohlcvData = indicatorsService.parseOHLCV(ohlcvRaw);
-
-      const signal = strategy.analyze(ohlcvData, config);
-
-      if (signal && signal.action !== 'hold') {
-        logger.info('Trade signal generated', {
-          botId,
-          action: signal.action,
-          reason: signal.reason,
-          confidence: signal.confidence,
-        });
-
-        if (mode === 'PAPER') {
-          const paper = exchangeService.getPaperExchange(exchangeName);
-          if (paper) {
-            const order = await paper.createOrder(symbol, signal.action, 'market', 0.001);
-            await prisma.trade.create({
-              data: {
-                botId,
-                symbol,
-                side: signal.action === 'buy' ? 'BUY' : 'SELL',
-                type: 'MARKET',
-                price: order.price,
-                amount: order.amount,
-                fee: order.price * order.amount * 0.001,
-              },
-            });
-          }
-        } else if (exchange) {
-          const order = await exchangeService.createOrder(
-            exchange,
-            symbol,
-            signal.action,
-            'market',
-            0.001
-          );
-          await prisma.trade.create({
-            data: {
-              botId,
-              symbol,
-              side: signal.action === 'buy' ? 'BUY' : 'SELL',
-              type: 'MARKET',
-              price: order.average ?? order.price ?? signal.price,
-              amount: order.filled ?? 0.001,
-              fee: order.fee?.cost ?? 0,
-            },
-          });
-        }
-
-        await prisma.botLog.create({
-          data: {
-            botId,
-            level: 'INFO',
-            message: `Signal: ${signal.action} - ${signal.reason}`,
-            data: (signal.metadata ?? {}) as import('@prisma/client').Prisma.InputJsonValue,
-          },
-        });
-      }
-    } catch (err) {
-      logger.error('Bot loop error', { botId, error: String(err) });
-      await prisma.botLog.create({
-        data: {
-          botId,
-          level: 'ERROR',
-          message: `Bot error: ${String(err)}`,
-        },
-      }).catch(() => {});
-    }
-  }, 60_000);
-
-  activeBots.set(botId, interval);
-}
-
-function stopBotLoop(botId: string): void {
-  const interval = activeBots.get(botId);
-  if (interval) {
-    clearInterval(interval);
-    activeBots.delete(botId);
-  }
-}
 
 export default router;

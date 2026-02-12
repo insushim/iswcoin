@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { Card, CardHeader } from "@/components/ui/card";
 import { cn, formatCurrency, formatPercent, formatNumber } from "@/lib/utils";
 import type { Ticker } from "@cryptosentinel/shared";
@@ -28,6 +29,16 @@ const COIN_NAMES: Record<string, string> = {
 };
 
 export function MarketOverview({ tickers }: MarketOverviewProps) {
+  const sparklineData = useMemo(() => {
+    const data = new Map<string, number[]>();
+    for (const t of tickers) {
+      if (!data.has(t.symbol)) {
+        data.set(t.symbol, Array.from({ length: 12 }, () => 30 + Math.random() * 70));
+      }
+    }
+    return data;
+  }, [tickers.map(t => t.symbol).join(',')]);
+
   return (
     <Card>
       <CardHeader>시장 현황</CardHeader>
@@ -63,19 +74,16 @@ export function MarketOverview({ tickers }: MarketOverviewProps) {
             </p>
             {/* Mini sparkline placeholder */}
             <div className="mt-2 flex items-end gap-px h-6">
-              {Array.from({ length: 12 }).map((_, i) => {
-                const h = 30 + Math.random() * 70;
-                return (
-                  <div
-                    key={i}
-                    className={cn(
-                      "flex-1 rounded-t-sm min-w-[2px]",
-                      ticker.change24h >= 0 ? "bg-emerald-500/40" : "bg-red-500/40"
-                    )}
-                    style={{ height: `${h}%` }}
-                  />
-                );
-              })}
+              {(sparklineData.get(ticker.symbol) ?? []).map((h, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex-1 rounded-t-sm min-w-[2px]",
+                    ticker.change24h >= 0 ? "bg-emerald-500/40" : "bg-red-500/40"
+                  )}
+                  style={{ height: `${h}%` }}
+                />
+              ))}
             </div>
           </div>
         ))}

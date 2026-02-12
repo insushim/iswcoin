@@ -102,6 +102,7 @@ model ApiKey {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, exchange, isActive])
   @@map("api_keys")
 }
 
@@ -157,6 +158,7 @@ model Portfolio {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, updatedAt])
   @@map("portfolios")
 }
 

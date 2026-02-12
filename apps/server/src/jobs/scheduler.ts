@@ -5,6 +5,12 @@ import { logger } from '../utils/logger.js';
 import { riskManager } from '../services/risk.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { emitTickerUpdate, emitBotStatus } from '../websocket/index.js';
+import { getDateRanges } from '../utils/date.js';
+
+const DURATIONS = {
+  ONE_WEEK_MS: 7 * 24 * 60 * 60 * 1000,
+  SIX_HOURS_MS: 6 * 60 * 60 * 1000,
+} as const;
 
 let publicExchange: Exchange | null = null;
 
@@ -123,8 +129,7 @@ export function startScheduler(): void {
         },
       });
 
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const { startOfDay } = getDateRanges();
 
       // 모든 봇 ID를 한 번에 모아서 오늘 거래를 일괄 조회
       const allBotIds = users.flatMap((u) => u.bots.map((b) => b.id));
@@ -203,7 +208,7 @@ export function startScheduler(): void {
       });
 
       const now = new Date();
-      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const oneWeekAgo = new Date(now.getTime() - DURATIONS.ONE_WEEK_MS);
 
       // 봇이 있는 유저만 필터
       const usersWithBots = users.filter((u) => u.bots.length > 0);
@@ -267,7 +272,7 @@ export function startScheduler(): void {
 
   cron.schedule('0 */6 * * *', async () => {
     try {
-      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const sixHoursAgo = new Date(Date.now() - DURATIONS.SIX_HOURS_MS);
 
       const stuckBots = await prisma.bot.findMany({
         where: {
