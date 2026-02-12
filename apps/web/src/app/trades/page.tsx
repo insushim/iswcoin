@@ -24,33 +24,6 @@ interface TradeRow {
   timestamp: string;
 }
 
-function generateDemoTrades(): TradeRow[] {
-  return Array.from({ length: 50 }, (_, i) => {
-    const side = i % 3 === 0 ? OrderSide.SELL : OrderSide.BUY;
-    const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
-    const symbol = symbols[i % symbols.length];
-    const basePrices: Record<string, number> = { BTCUSDT: 97500, ETHUSDT: 3250, SOLUSDT: 198, BNBUSDT: 625, XRPUSDT: 2.45 };
-    const price = basePrices[symbol] * (1 + (i % 7 - 3) * 0.005);
-    const amount = symbol === "BTCUSDT" ? 0.01 + (i % 5) * 0.01 : 0.5 + (i % 5) * 0.8;
-    const total = price * amount;
-    const pnl = (i % 5 - 1.5) * 45;
-    const bots = ["BTC DCA 전략", "ETH 그리드 봇", "SOL 모멘텀", "BNB 평균회귀"];
-
-    return {
-      id: `trade-${i + 1}`,
-      symbol,
-      side,
-      type: i % 4 === 0 ? "LIMIT" : "MARKET",
-      price,
-      amount,
-      total,
-      fee: total * 0.001,
-      pnl,
-      botName: bots[i % bots.length],
-      timestamp: new Date(Date.now() - i * 3600000 * 2.5).toISOString(),
-    };
-  });
-}
 
 function mapTrade(raw: Record<string, unknown>): TradeRow {
   const price = Number(raw.entry_price ?? raw.entryPrice ?? raw.price ?? 0);
@@ -87,9 +60,9 @@ export default function TradesPage() {
       const res = await api.get(endpoints.trades.list, { params: { limit: 100 } });
       const raw = res.data.data ?? res.data;
       const list = Array.isArray(raw) ? raw.map(mapTrade) : [];
-      setTrades(list.length > 0 ? list : generateDemoTrades());
+      setTrades(list);
     } catch {
-      setTrades(generateDemoTrades());
+      setTrades([]);
     } finally {
       setIsLoading(false);
     }
@@ -115,7 +88,7 @@ export default function TradesPage() {
       }
       return true;
     });
-  }, [symbolFilter, sideFilter, dateFrom, dateTo]);
+  }, [trades, symbolFilter, sideFilter, dateFrom, dateTo]);
 
   const totalPages = Math.ceil(filteredTrades.length / PAGE_SIZE);
   const paginatedTrades = filteredTrades.slice(

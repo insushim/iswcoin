@@ -39,7 +39,11 @@ settingsRoutes.post('/api-keys', async (c) => {
   const userId = c.get('userId');
   const body = await parseJsonBody(c.req.raw);
 
-  const { exchange, apiKey, secretKey, passphrase, label } = body;
+  const exchange = body.exchange as string;
+  const apiKey = body.apiKey as string;
+  const secretKey = body.secretKey as string;
+  const passphrase = body.passphrase as string | undefined;
+  const label = body.label as string | undefined;
 
   if (!exchange || !apiKey || !secretKey) {
     return c.json({ error: 'Exchange, API key, and secret key are required' }, 400);
@@ -192,8 +196,15 @@ settingsRoutes.put('/profile', async (c) => {
   const updates: string[] = [];
   const values: unknown[] = [];
 
-  if (body.name !== undefined) { updates.push('name = ?'); values.push(body.name); }
+  if (body.name !== undefined) {
+    const name = String(body.name).trim();
+    if (name.length > 50) return c.json({ error: 'Name must be 50 characters or less' }, 400);
+    updates.push('name = ?');
+    values.push(name);
+  }
   if (body.email !== undefined) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(String(body.email))) return c.json({ error: 'Invalid email format' }, 400);
     // Check if email is already taken
     const existingEmail = await c.env.DB.prepare(
       'SELECT id FROM users WHERE email = ? AND id != ?'
@@ -227,13 +238,14 @@ settingsRoutes.put('/password', async (c) => {
   const userId = c.get('userId');
   const body = await parseJsonBody(c.req.raw);
 
-  const { currentPassword, newPassword } = body;
+  const currentPassword = body.currentPassword as string;
+  const newPassword = body.newPassword as string;
   if (!currentPassword || !newPassword) {
     return c.json({ error: 'Current password and new password are required' }, 400);
   }
 
-  if (newPassword.length < 6) {
-    return c.json({ error: 'New password must be at least 6 characters' }, 400);
+  if (newPassword.length < 8) {
+    return c.json({ error: 'New password must be at least 8 characters' }, 400);
   }
 
   // Verify current password

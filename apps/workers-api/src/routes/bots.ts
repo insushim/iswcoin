@@ -188,16 +188,29 @@ botRoutes.patch('/:id/status', async (c) => {
   const id = c.req.param('id');
   const { status } = await parseJsonBody(c.req.raw) as { status: string };
 
+  // 상태값 화이트리스트 검증
+  const validStatuses = ['RUNNING', 'STOPPED', 'PAUSED', 'ERROR'];
+  if (!status || !validStatuses.includes(status)) {
+    return c.json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` }, 400);
+  }
+
   const existing = await c.env.DB.prepare(
     'SELECT id FROM bots WHERE id = ? AND user_id = ?'
   ).bind(id, userId).first();
   if (!existing) return c.json({ error: 'Bot not found' }, 404);
 
   const now = new Date().toISOString();
-  const extra = status === 'RUNNING' ? `, started_at = '${now}'` : status === 'STOPPED' ? `, stopped_at = '${now}'` : '';
 
-  await c.env.DB.prepare(`UPDATE bots SET status = ?, updated_at = ?${extra} WHERE id = ?`)
-    .bind(status, now, id).run();
+  if (status === 'RUNNING') {
+    await c.env.DB.prepare('UPDATE bots SET status = ?, started_at = ?, updated_at = ? WHERE id = ?')
+      .bind(status, now, now, id).run();
+  } else if (status === 'STOPPED') {
+    await c.env.DB.prepare('UPDATE bots SET status = ?, stopped_at = ?, updated_at = ? WHERE id = ?')
+      .bind(status, now, now, id).run();
+  } else {
+    await c.env.DB.prepare('UPDATE bots SET status = ?, updated_at = ? WHERE id = ?')
+      .bind(status, now, id).run();
+  }
 
   const bot = await c.env.DB.prepare('SELECT * FROM bots WHERE id = ?').bind(id).first<BotRow>();
   if (!bot) return c.json({ error: 'Bot not found' }, 404);
@@ -221,7 +234,15 @@ botRoutes.delete('/:id', async (c) => {
 
 // GET /:id/performance - Get bot performance
 botRoutes.get('/:id/performance', async (c) => {
+  const userId = c.get('userId');
   const id = c.req.param('id');
+
+  // 봇 소유권 확인
+  const bot = await c.env.DB.prepare(
+    'SELECT id FROM bots WHERE id = ? AND user_id = ?'
+  ).bind(id, userId).first();
+  if (!bot) return c.json({ error: 'Bot not found' }, 404);
+
   const { results: trades } = await c.env.DB.prepare(
     'SELECT * FROM trades WHERE bot_id = ? AND status = ? ORDER BY closed_at DESC LIMIT 50'
   ).bind(id, 'CLOSED').all();

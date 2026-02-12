@@ -59,11 +59,12 @@ export default function SettingsPage() {
   // Profile state
   const [profileName, setProfileName] = useState(user?.name ?? "");
   const [profileEmail, setProfileEmail] = useState(user?.email ?? "");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
   // API Keys state
-  const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>(DEMO_API_KEYS);
+  const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
   const [showAddKey, setShowAddKey] = useState(false);
   const [newKeyExchange, setNewKeyExchange] = useState<Exchange>(Exchange.BINANCE);
   const [newKeyLabel, setNewKeyLabel] = useState("");
@@ -95,7 +96,7 @@ export default function SettingsPage() {
         })));
       }
     } catch {
-      // Keep demo keys
+      setApiKeys([]);
     }
   }, []);
 
@@ -111,8 +112,9 @@ export default function SettingsPage() {
   const handleSaveProfile = async () => {
     try {
       await api.put(endpoints.settings.profile, { name: profileName, email: profileEmail });
-      if (newPassword && newPassword === confirmPassword) {
-        await api.put("/settings/password", { password: newPassword });
+      if (newPassword && newPassword === confirmPassword && currentPassword) {
+        await api.put(`${endpoints.settings.profile.replace('/profile', '/password')}`, { currentPassword, newPassword });
+        setCurrentPassword("");
         setNewPassword("");
         setConfirmPassword("");
       }
@@ -220,7 +222,14 @@ export default function SettingsPage() {
             onChange={(e) => setProfileEmail(e.target.value)}
           />
         </div>
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Input
+            label="현재 비밀번호"
+            type="password"
+            placeholder="비밀번호 변경 시 필수"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+          />
           <Input
             label="새 비밀번호"
             type="password"

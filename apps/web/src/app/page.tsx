@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StatsGrid } from "@/components/dashboard/stats-grid";
 import { ActiveBots } from "@/components/dashboard/active-bots";
 import { RecentTrades } from "@/components/dashboard/recent-trades";
@@ -12,63 +12,89 @@ import { usePortfolioStore } from "@/stores/portfolio.store";
 import { useMarketStore } from "@/stores/market.store";
 import { useAuthStore } from "@/stores/auth.store";
 import { BotStatus, OrderSide } from "@cryptosentinel/shared";
-import type { Ticker } from "@cryptosentinel/shared";
+import api, { endpoints } from "@/lib/api";
 
-// Demo data for when API is not available
-const DEMO_TICKERS: Ticker[] = [
-  { symbol: "BTCUSDT", price: 97523.45, bid: 97520, ask: 97525, volume24h: 28543000000, change24h: 2.34, timestamp: Date.now() },
-  { symbol: "ETHUSDT", price: 3245.67, bid: 3245, ask: 3246, volume24h: 15234000000, change24h: -1.23, timestamp: Date.now() },
-  { symbol: "BNBUSDT", price: 625.89, bid: 625, ask: 626, volume24h: 1823000000, change24h: 0.87, timestamp: Date.now() },
-  { symbol: "SOLUSDT", price: 198.34, bid: 198, ask: 199, volume24h: 4532000000, change24h: 5.67, timestamp: Date.now() },
-  { symbol: "XRPUSDT", price: 2.45, bid: 2.44, ask: 2.46, volume24h: 3254000000, change24h: -0.54, timestamp: Date.now() },
-  { symbol: "ADAUSDT", price: 0.892, bid: 0.891, ask: 0.893, volume24h: 987000000, change24h: 1.12, timestamp: Date.now() },
-  { symbol: "AVAXUSDT", price: 38.56, bid: 38.50, ask: 38.60, volume24h: 654000000, change24h: -2.1, timestamp: Date.now() },
-  { symbol: "DOTUSDT", price: 7.89, bid: 7.88, ask: 7.90, volume24h: 432000000, change24h: 0.34, timestamp: Date.now() },
-];
-
-const DEMO_TRADES = [
-  { id: "1", symbol: "BTCUSDT", side: OrderSide.BUY, price: 97100.00, amount: 0.015, pnl: 42.35, timestamp: new Date(Date.now() - 120000).toISOString() },
-  { id: "2", symbol: "ETHUSDT", side: OrderSide.SELL, price: 3260.50, amount: 0.5, pnl: -15.20, timestamp: new Date(Date.now() - 3600000).toISOString() },
-  { id: "3", symbol: "SOLUSDT", side: OrderSide.BUY, price: 195.00, amount: 3.2, pnl: 10.69, timestamp: new Date(Date.now() - 7200000).toISOString() },
-  { id: "4", symbol: "BTCUSDT", side: OrderSide.SELL, price: 97800.00, amount: 0.01, pnl: 78.00, timestamp: new Date(Date.now() - 14400000).toISOString() },
-  { id: "5", symbol: "BNBUSDT", side: OrderSide.BUY, price: 620.00, amount: 1.0, pnl: 5.89, timestamp: new Date(Date.now() - 28800000).toISOString() },
-];
-
-const DEMO_PNL = Array.from({ length: 30 }, (_, i) => ({
-  date: new Date(Date.now() - (29 - i) * 86400000).toISOString(),
-  pnl: Math.round((Math.random() * 600 - 200) * 100) / 100,
-}));
+interface DashboardTrade {
+  id: string;
+  symbol: string;
+  side: OrderSide;
+  price: number;
+  amount: number;
+  pnl: number;
+  timestamp: string;
+}
 
 export default function DashboardPage() {
-  const { loadFromStorage } = useAuthStore();
+  const { loadFromStorage, isAuthenticated } = useAuthStore();
   const { bots, fetchBots } = useBotStore();
-  const { summary, fetchPortfolio } = usePortfolioStore();
+  const { summary, history, fetchPortfolio, fetchHistory } = usePortfolioStore();
   const { tickers, fetchTickers } = useMarketStore();
+  const [recentTrades, setRecentTrades] = useState<DashboardTrade[]>([]);
+  const [sentimentScore, setSentimentScore] = useState(50);
 
   useEffect(() => {
     loadFromStorage();
+  }, [loadFromStorage]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
     fetchBots().catch(() => {});
     fetchPortfolio().catch(() => {});
+    fetchHistory(30).catch(() => {});
     fetchTickers().catch(() => {});
-  }, [loadFromStorage, fetchBots, fetchPortfolio, fetchTickers]);
+
+    // Fetch recent trades
+    api.get(endpoints.trades.list, { params: { limit: 10 } })
+      .then((res) => {
+        const data = res.data.data ?? res.data;
+        if (Array.isArray(data)) {
+          setRecentTrades(data.map((t: Record<string, unknown>) => ({
+            id: t.id as string,
+            symbol: t.symbol as string,
+            side: t.side as OrderSide,
+            price: Number(t.price ?? 0),
+            amount: Number(t.amount ?? 0),
+            pnl: Number(t.pnl ?? 0),
+            timestamp: (t.timestamp as string) || (t.createdAt as string) || new Date().toISOString(),
+          })));
+        }
+      })
+      .catch(() => {});
+
+    // Fetch sentiment
+    api.get(endpoints.market.sentiment)
+      .then((res) => {
+        const data = res.data.data ?? res.data;
+        if (data?.fearGreedIndex !== undefined) {
+          setSentimentScore(Number(data.fearGreedIndex));
+        }
+      })
+      .catch(() => {});
+  }, [isAuthenticated, fetchBots, fetchPortfolio, fetchHistory, fetchTickers]);
 
   const activeBotCount = bots.filter((b) => b.status === BotStatus.RUNNING).length;
 
   const tickerList = useMemo(() => {
-    const fromStore = Array.from(tickers.values());
-    return fromStore.length > 0 ? fromStore : DEMO_TICKERS;
+    return Array.from(tickers.values());
   }, [tickers]);
+
+  const pnlData = useMemo(() => {
+    if (history.length > 0) {
+      return history.map((h) => ({ date: h.date, pnl: h.pnl }));
+    }
+    return [];
+  }, [history]);
 
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Stats */}
       <StatsGrid
-        totalValue={summary?.totalValue ?? 125432.56}
-        dailyPnL={summary?.dailyPnL ?? 342.50}
-        dailyPnLPercent={summary?.dailyPnLPercent ?? 0.27}
-        activeBots={activeBotCount || 3}
-        totalBots={bots.length || 5}
-        sentimentScore={62}
+        totalValue={summary?.totalValue ?? 0}
+        dailyPnL={summary?.dailyPnL ?? 0}
+        dailyPnLPercent={summary?.dailyPnLPercent ?? 0}
+        activeBots={activeBotCount}
+        totalBots={bots.length}
+        sentimentScore={sentimentScore}
       />
 
       {/* Charts + Active bots row */}
@@ -76,7 +102,13 @@ export default function DashboardPage() {
         <div className="lg:col-span-2">
           <Card>
             <CardHeader>일일 손익 (30일)</CardHeader>
-            <PnLChart data={DEMO_PNL} height={280} />
+            {pnlData.length > 0 ? (
+              <PnLChart data={pnlData} height={280} />
+            ) : (
+              <div className="flex h-[280px] items-center justify-center text-sm text-slate-500">
+                봇을 실행하면 손익 차트가 표시됩니다
+              </div>
+            )}
           </Card>
         </div>
         <div className="lg:col-span-1">
@@ -86,7 +118,7 @@ export default function DashboardPage() {
 
       {/* Trades + Market overview row */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <RecentTrades trades={DEMO_TRADES} />
+        <RecentTrades trades={recentTrades} />
         <MarketOverview tickers={tickerList} />
       </div>
     </div>

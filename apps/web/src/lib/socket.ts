@@ -1,4 +1,6 @@
-import { io, Socket } from "socket.io-client";
+// REST 폴링 기반으로 전환됨 (Workers는 WebSocket 미지원)
+// 이 파일은 호환성을 위해 유지하되, socket.io-client 의존성은 불필요
+
 import type {
   Ticker,
   BotStatus,
@@ -7,8 +9,6 @@ import type {
   PortfolioSummary,
   RegimeState,
 } from "@cryptosentinel/shared";
-
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:4000";
 
 interface ServerToClientEvents {
   "ticker:update": (data: Ticker) => void;
@@ -36,70 +36,14 @@ interface ClientToServerEvents {
   "unsubscribe:bot": (botId: string) => void;
 }
 
-type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+// 타입 export (다른 곳에서 사용 가능)
+export type { ServerToClientEvents, ClientToServerEvents };
 
-let socket: TypedSocket | null = null;
-
-export function getSocket(): TypedSocket {
-  if (!socket) {
-    socket = io(WS_URL, {
-      autoConnect: false,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 10000,
-      transports: ["websocket", "polling"],
-    }) as TypedSocket;
-  }
-  return socket;
-}
-
-export function connectSocket(token?: string): TypedSocket {
-  const s = getSocket();
-
-  if (token) {
-    s.auth = { token };
-  }
-
-  if (!s.connected) {
-    s.connect();
-  }
-
-  return s;
-}
-
-export function disconnectSocket(): void {
-  if (socket) {
-    socket.disconnect();
-    socket = null;
-  }
-}
-
-export function subscribeTicker(symbol: string): void {
-  const s = getSocket();
-  if (s.connected) {
-    s.emit("subscribe:ticker", symbol);
-  }
-}
-
-export function unsubscribeTicker(symbol: string): void {
-  const s = getSocket();
-  if (s.connected) {
-    s.emit("unsubscribe:ticker", symbol);
-  }
-}
-
-export function subscribeBot(botId: string): void {
-  const s = getSocket();
-  if (s.connected) {
-    s.emit("subscribe:bot", botId);
-  }
-}
-
-export function unsubscribeBot(botId: string): void {
-  const s = getSocket();
-  if (s.connected) {
-    s.emit("unsubscribe:bot", botId);
-  }
-}
+// noop 함수들 (REST 폴링으로 대체됨)
+export function getSocket() { return null; }
+export function connectSocket() { return null; }
+export function disconnectSocket() { /* noop */ }
+export function subscribeTicker(_symbol: string) { /* noop */ }
+export function unsubscribeTicker(_symbol: string) { /* noop */ }
+export function subscribeBot(_botId: string) { /* noop */ }
+export function unsubscribeBot(_botId: string) { /* noop */ }

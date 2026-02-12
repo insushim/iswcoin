@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /settings/
+
+Sitemap: https://cryptosentinel.pages.dev/sitemap.xml

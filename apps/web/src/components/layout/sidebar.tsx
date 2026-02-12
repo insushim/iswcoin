@@ -35,6 +35,8 @@ export function Sidebar() {
 
   return (
     <aside
+      role="navigation"
+      aria-label="메인 내비게이션"
       className={cn(
         "fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-slate-800 bg-slate-950 transition-all duration-300",
         collapsed ? "w-16" : "w-60"
@@ -84,6 +86,7 @@ export function Sidebar() {
       <div className="border-t border-slate-800 p-2">
         <button
           onClick={() => setCollapsed(!collapsed)}
+          aria-label={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
           className="flex w-full items-center justify-center rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
         >
           {collapsed ? (

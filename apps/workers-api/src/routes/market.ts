@@ -101,7 +101,7 @@ function buildFallbackTickers() {
   }));
 }
 
-// GET /tickers - All tickers (frontend dashboard format)
+// GET /tickers - All tickers (frontend dashboard format) + 캐시 헤더
 marketRoutes.get('/tickers', async (c) => {
   try {
     const ids = Object.values(SYMBOL_MAP).join(',');
@@ -126,6 +126,9 @@ marketRoutes.get('/tickers', async (c) => {
         timestamp: Date.now(),
       };
     }).filter(Boolean);
+
+    // 캐시: 15초 (시장 데이터 빈번 변동)
+    c.header('Cache-Control', 'public, max-age=15, s-maxage=15');
 
     // If CoinGecko returned empty/rate-limited, use fallback
     if (tickers.length === 0) {
@@ -164,8 +167,9 @@ marketRoutes.get('/overview', async (c) => {
   }
 });
 
-// GET /sentiment - Market sentiment (no symbol param needed)
+// GET /sentiment - Market sentiment (캐시 5분)
 marketRoutes.get('/sentiment', async (c) => {
+  c.header('Cache-Control', 'public, max-age=300, s-maxage=300');
   try {
     const res = await fetch('https://api.alternative.me/fng/?limit=7');
     const data = await res.json() as { data?: Array<{ value: string; value_classification: string; timestamp: string }> };
@@ -253,8 +257,9 @@ marketRoutes.get('/sentiment/:symbol', async (c) => {
   }
 });
 
-// GET /indicators/:symbol - Technical indicators
+// GET /indicators/:symbol - Technical indicators (캐시 30초)
 marketRoutes.get('/indicators/:symbol', async (c) => {
+  c.header('Cache-Control', 'public, max-age=30, s-maxage=30');
   const { symbol, coinId } = resolveSymbol(c.req.param('symbol'));
 
   try {

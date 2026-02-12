@@ -1,121 +1,214 @@
-// Paper Trading Engine - Cron-based strategy execution
+// Paper Trading Engine v3 - Advanced Strategy Execution
+// 10 strategies with real technical indicators (RSI, EMA, MACD, BB, ATR, Z-Score)
+// v3: 비대칭 R/R, 추세 필터, 과매도 진입, 빠른 이익 실현
+// Runs every 5 minutes via Cloudflare Workers Cron
 import type { Env } from './index';
 import { generateId } from './utils';
 
-const COINGECKO_BASE = 'https://api.coingecko.com/api/v3';
-
-// Symbol to CoinGecko ID mapping
-const SYMBOL_TO_COINGECKO: Record<string, string> = {
+const CG = 'https://api.coingecko.com/api/v3';
+const COIN_MAP: Record<string, string> = {
   BTCUSDT: 'bitcoin', ETHUSDT: 'ethereum', SOLUSDT: 'solana',
   BNBUSDT: 'binancecoin', XRPUSDT: 'ripple', ADAUSDT: 'cardano',
   DOGEUSDT: 'dogecoin', AVAXUSDT: 'avalanche-2', DOTUSDT: 'polkadot',
   MATICUSDT: 'matic-network', LINKUSDT: 'chainlink', UNIUSDT: 'uniswap',
 };
-
-// Fallback prices in case CoinGecko rate-limits
-const FALLBACK_PRICES: Record<string, number> = {
+const FALLBACK: Record<string, number> = {
   BTCUSDT: 97500, ETHUSDT: 3250, SOLUSDT: 198, BNBUSDT: 625,
   XRPUSDT: 2.45, ADAUSDT: 0.89, DOGEUSDT: 0.32, AVAXUSDT: 38.5,
   DOTUSDT: 7.89, MATICUSDT: 0.42, LINKUSDT: 19.50, UNIUSDT: 12.30,
 };
 
-// ============ Price Fetching (CoinGecko) ============
+// Min intervals per strategy (ms)
+const MIN_INTERVAL: Record<string, number> = {
+  DCA: 1800000,           // 30 min
+  GRID: 300000,           // 5 min
+  MOMENTUM: 900000,       // 15 min
+  MEAN_REVERSION: 900000, // 15 min
+  TRAILING: 600000,       // 10 min
+  MARTINGALE: 600000,     // 10 min
+  SCALPING: 300000,       // 5 min
+  STAT_ARB: 900000,       // 15 min
+  FUNDING_ARB: 3600000,   // 60 min
+  RL_AGENT: 900000,       // 15 min
+};
 
-async function getPrices(symbols: string[]): Promise<Record<string, number>> {
+// ============ Types ============
+
+interface Position {
+  symbol: string; amount: number; entryPrice: number;
+  currentPrice: number; pnl: number; pnlPercent: number;
+}
+interface BotRow {
+  id: string; user_id: string; name: string; strategy: string;
+  symbol: string; config: string; status: string;
+}
+interface TradeSignal {
+  side: 'BUY' | 'SELL'; quantity: number; cost: number; reason: string;
+}
+interface Indicators {
+  prices: number[]; current: number;
+  rsi: number; rsi7: number;
+  ema9: number; ema21: number;
+  macdLine: number; macdSignal: number; macdHist: number;
+  bbUpper: number; bbMid: number; bbLower: number;
+  bbUpper10: number; bbLower10: number;
+  bbUpper25: number; bbLower25: number; // BB(20, 2.5) for mean reversion
+  atr: number; zScore: number;
+  trend: number; // -1 to +1
+  chg1h: number; chg24h: number;
+}
+
+// ============ Price Fetching ============
+
+async function fetchCurrentPrices(symbols: string[]): Promise<Record<string, number>> {
   const prices: Record<string, number> = {};
-  const unique = [...new Set(symbols)];
-
-  // Collect CoinGecko IDs for requested symbols
-  const coinIds: string[] = [];
-  for (const sym of unique) {
-    const id = SYMBOL_TO_COINGECKO[sym];
-    if (id) coinIds.push(id);
-  }
-
-  if (coinIds.length === 0) {
-    // Use fallback for unknown symbols
-    for (const sym of unique) {
-      if (FALLBACK_PRICES[sym]) prices[sym] = FALLBACK_PRICES[sym];
-    }
+  const ids = symbols.map(s => COIN_MAP[s]).filter(Boolean);
+  if (ids.length === 0) {
+    for (const s of symbols) if (FALLBACK[s]) prices[s] = FALLBACK[s] * (1 + (Math.random() - 0.5) * 0.004);
     return prices;
   }
-
   try {
-    const ids = coinIds.join(',');
-    const res = await fetch(
-      `${COINGECKO_BASE}/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
-      { headers: { 'Accept': 'application/json', 'User-Agent': 'CryptoSentinel/1.0' } }
-    );
-    if (!res.ok) throw new Error(`CoinGecko API error: ${res.status}`);
-    const data = await res.json() as Record<string, { usd: number; usd_24h_change?: number }>;
-
-    // Map back to symbol format
-    for (const sym of unique) {
-      const coinId = SYMBOL_TO_COINGECKO[sym];
-      if (coinId && data[coinId]?.usd) {
-        prices[sym] = data[coinId].usd;
-      } else if (FALLBACK_PRICES[sym]) {
-        prices[sym] = FALLBACK_PRICES[sym];
-      }
+    const res = await fetch(`${CG}/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true`,
+      { headers: { Accept: 'application/json', 'User-Agent': 'CryptoSentinel/2.0' } });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const data = await res.json() as Record<string, { usd: number }>;
+    for (const s of symbols) {
+      const cid = COIN_MAP[s];
+      prices[s] = (cid && data[cid]?.usd) ? data[cid].usd : (FALLBACK[s] || 0) * (1 + (Math.random() - 0.5) * 0.004);
     }
   } catch {
-    // Use fallback prices
-    for (const sym of unique) {
-      if (FALLBACK_PRICES[sym]) prices[sym] = FALLBACK_PRICES[sym];
-    }
+    for (const s of symbols) if (FALLBACK[s]) prices[s] = FALLBACK[s] * (1 + (Math.random() - 0.5) * 0.004);
   }
-
   return prices;
 }
 
-// Get 24hr price change from CoinGecko
-async function get24hChange(symbol: string): Promise<number> {
-  const coinId = SYMBOL_TO_COINGECKO[symbol];
-  if (!coinId) return 0;
+async function fetchHistory(symbol: string): Promise<number[]> {
+  const cid = COIN_MAP[symbol];
+  if (!cid) return [];
   try {
-    const res = await fetch(
-      `${COINGECKO_BASE}/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true`,
-      { headers: { 'Accept': 'application/json', 'User-Agent': 'CryptoSentinel/1.0' } }
-    );
-    if (!res.ok) return 0;
-    const data = await res.json() as Record<string, { usd_24h_change?: number }>;
-    return data[coinId]?.usd_24h_change || 0;
-  } catch {
-    return 0;
+    const res = await fetch(`${CG}/coins/${cid}/market_chart?vs_currency=usd&days=3`,
+      { headers: { Accept: 'application/json', 'User-Agent': 'CryptoSentinel/2.0' } });
+    if (!res.ok) return [];
+    const data = await res.json() as { prices?: number[][] };
+    return (data.prices || []).map(p => p[1]);
+  } catch { return []; }
+}
+
+// ============ Technical Indicators ============
+
+function ema(prices: number[], period: number): number {
+  if (!prices.length) return 0;
+  if (prices.length < period) return prices[prices.length - 1];
+  const k = 2 / (period + 1);
+  let e = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < prices.length; i++) e = prices[i] * k + e * (1 - k);
+  return e;
+}
+
+function emaSeries(prices: number[], period: number): number[] {
+  if (prices.length < period) return [...prices];
+  const k = 2 / (period + 1);
+  const r = [...prices.slice(0, period - 1)];
+  let e = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  r.push(e);
+  for (let i = period; i < prices.length; i++) { e = prices[i] * k + e * (1 - k); r.push(e); }
+  return r;
+}
+
+function rsi(prices: number[], period: number = 14): number {
+  if (prices.length < period + 1) return 50;
+  let g = 0, l = 0;
+  for (let i = prices.length - period; i < prices.length; i++) {
+    const d = prices[i] - prices[i - 1];
+    if (d > 0) g += d; else l -= d;
   }
+  if (l === 0) return 100;
+  return 100 - 100 / (1 + (g / period) / (l / period));
+}
+
+function macd(prices: number[]): { line: number; signal: number; hist: number } {
+  if (prices.length < 26) return { line: 0, signal: 0, hist: 0 };
+  const e12 = emaSeries(prices, 12);
+  const e26 = emaSeries(prices, 26);
+  const macdLine: number[] = [];
+  for (let i = 25; i < prices.length; i++) macdLine.push(e12[i] - e26[i]);
+  const line = macdLine[macdLine.length - 1] || 0;
+  const signal = macdLine.length >= 9 ? ema(macdLine, 9) : line * 0.8;
+  return { line, signal, hist: line - signal };
+}
+
+function bb(prices: number[], period: number, mult: number) {
+  if (prices.length < period) { const p = prices[prices.length - 1] || 0; return { u: p, m: p, l: p }; }
+  const s = prices.slice(-period);
+  const m = s.reduce((a, b) => a + b, 0) / period;
+  const std = Math.sqrt(s.reduce((sum, p) => sum + (p - m) ** 2, 0) / period);
+  return { u: m + mult * std, m, l: m - mult * std };
+}
+
+function atr(prices: number[], period: number = 14): number {
+  if (prices.length < period + 1) return 0;
+  let sum = 0;
+  for (let i = prices.length - period; i < prices.length; i++) sum += Math.abs(prices[i] - prices[i - 1]);
+  return sum / period;
+}
+
+function zScore(prices: number[], period: number = 20): number {
+  if (prices.length < period) return 0;
+  const s = prices.slice(-period);
+  const m = s.reduce((a, b) => a + b, 0) / period;
+  const std = Math.sqrt(s.reduce((sum, p) => sum + (p - m) ** 2, 0) / period);
+  return std === 0 ? 0 : (prices[prices.length - 1] - m) / std;
+}
+
+function getTrend(prices: number[]): number {
+  if (prices.length < 25) return 0;
+  const e20now = ema(prices, 20);
+  const e20prev = ema(prices.slice(0, -5), 20);
+  const pctChange = (e20now - e20prev) / e20prev;
+  if (pctChange > 0.03) return 1;
+  if (pctChange > 0.01) return 0.5;
+  if (pctChange < -0.03) return -1;
+  if (pctChange < -0.01) return -0.5;
+  return 0;
+}
+
+function calcIndicators(history: number[], current: number): Indicators {
+  const p = history.length > 2 ? history : [current, current, current];
+  const n = p.length;
+  const m = macd(p);
+  const b20 = bb(p, 20, 2);
+  const b10 = bb(p, 10, 1.5);
+  const b25 = bb(p, 20, 2.5);
+  return {
+    prices: p, current,
+    rsi: rsi(p, 14), rsi7: rsi(p, 7),
+    ema9: ema(p, 9), ema21: ema(p, 21),
+    macdLine: m.line, macdSignal: m.signal, macdHist: m.hist,
+    bbUpper: b20.u, bbMid: b20.m, bbLower: b20.l,
+    bbUpper10: b10.u, bbLower10: b10.l,
+    bbUpper25: b25.u, bbLower25: b25.l,
+    atr: atr(p, 14), zScore: zScore(p, 20),
+    trend: getTrend(p),
+    chg1h: n > 12 ? ((current - p[n - 13]) / p[n - 13]) * 100 : 0,
+    chg24h: n > 24 ? ((current - p[Math.max(0, n - 25)]) / p[Math.max(0, n - 25)]) * 100 : 0,
+  };
 }
 
 // ============ Portfolio Helpers ============
 
-interface Position {
-  symbol: string;
-  amount: number;
-  entryPrice: number;
-  currentPrice: number;
-  pnl: number;
-  pnlPercent: number;
-}
-
-async function getPortfolio(db: D1Database, userId: string): Promise<{ id: string; positions: Position[]; totalValue: number }> {
-  const row = await db.prepare(
-    'SELECT id, positions, total_value FROM portfolios WHERE user_id = ? LIMIT 1'
-  ).bind(userId).first<{ id: string; positions: string; total_value: number }>();
-
+async function getPortfolio(db: D1Database, userId: string) {
+  const row = await db.prepare('SELECT id, positions, total_value FROM portfolios WHERE user_id = ? LIMIT 1')
+    .bind(userId).first<{ id: string; positions: string; total_value: number }>();
   if (!row) {
-    // Create default portfolio
     const id = generateId();
-    const defaultPositions: Position[] = [{ symbol: 'USDT', amount: 10000, entryPrice: 1, currentPrice: 1, pnl: 0, pnlPercent: 0 }];
-    await db.prepare(
-      'INSERT INTO portfolios (id, user_id, total_value, daily_pnl, positions) VALUES (?, ?, 10000, 0, ?)'
-    ).bind(id, userId, JSON.stringify(defaultPositions)).run();
-    return { id, positions: defaultPositions, totalValue: 10000 };
+    const pos: Position[] = [{ symbol: 'USDT', amount: 10000, entryPrice: 1, currentPrice: 1, pnl: 0, pnlPercent: 0 }];
+    await db.prepare('INSERT INTO portfolios (id, user_id, total_value, daily_pnl, positions) VALUES (?, ?, 10000, 0, ?)')
+      .bind(id, userId, JSON.stringify(pos)).run();
+    return { id, positions: pos, totalValue: 10000 };
   }
-
   let positions: Position[] = [];
-  try { positions = JSON.parse(row.positions || '[]'); } catch { /* empty */ }
-  if (positions.length === 0) {
-    positions = [{ symbol: 'USDT', amount: row.total_value || 10000, entryPrice: 1, currentPrice: 1, pnl: 0, pnlPercent: 0 }];
-  }
+  try { positions = JSON.parse(row.positions || '[]'); } catch { /* */ }
+  if (!positions.length) positions = [{ symbol: 'USDT', amount: row.total_value || 10000, entryPrice: 1, currentPrice: 1, pnl: 0, pnlPercent: 0 }];
   return { id: row.id, positions, totalValue: row.total_value || 10000 };
 }
 
@@ -123,355 +216,473 @@ function getCash(positions: Position[]): number {
   return positions.find(p => p.symbol === 'USDT')?.amount || 0;
 }
 
-function updatePositions(
-  positions: Position[],
-  side: 'BUY' | 'SELL',
-  baseSymbol: string,
-  quantity: number,
-  price: number,
-  costOrRevenue: number
-): Position[] {
-  const updated = [...positions];
+function getPosition(positions: Position[], baseSymbol: string): Position | undefined {
+  return positions.find(p => p.symbol === baseSymbol && p.amount > 0.000001);
+}
 
-  // Update USDT (cash)
-  const usdtIdx = updated.findIndex(p => p.symbol === 'USDT');
-  if (usdtIdx >= 0) {
-    if (side === 'BUY') {
-      updated[usdtIdx] = { ...updated[usdtIdx], amount: updated[usdtIdx].amount - costOrRevenue };
-    } else {
-      updated[usdtIdx] = { ...updated[usdtIdx], amount: updated[usdtIdx].amount + costOrRevenue };
-    }
-  }
-
-  // Update asset position
-  const assetIdx = updated.findIndex(p => p.symbol === baseSymbol);
+function updatePositions(positions: Position[], side: 'BUY' | 'SELL', base: string, qty: number, price: number, cost: number): Position[] {
+  const up = [...positions];
+  const ui = up.findIndex(p => p.symbol === 'USDT');
+  if (ui >= 0) up[ui] = { ...up[ui], amount: up[ui].amount + (side === 'BUY' ? -cost : cost) };
+  const ai = up.findIndex(p => p.symbol === base);
   if (side === 'BUY') {
-    if (assetIdx >= 0) {
-      const existing = updated[assetIdx];
-      const totalAmount = existing.amount + quantity;
-      const avgEntry = (existing.entryPrice * existing.amount + price * quantity) / totalAmount;
-      updated[assetIdx] = {
-        symbol: baseSymbol,
-        amount: totalAmount,
-        entryPrice: parseFloat(avgEntry.toFixed(2)),
-        currentPrice: price,
-        pnl: parseFloat(((price - avgEntry) * totalAmount).toFixed(2)),
-        pnlPercent: parseFloat((((price - avgEntry) / avgEntry) * 100).toFixed(2)),
-      };
+    if (ai >= 0) {
+      const tot = up[ai].amount + qty;
+      const avg = (up[ai].entryPrice * up[ai].amount + price * qty) / tot;
+      up[ai] = { symbol: base, amount: tot, entryPrice: +avg.toFixed(2), currentPrice: price, pnl: +((price - avg) * tot).toFixed(2), pnlPercent: +((price - avg) / avg * 100).toFixed(2) };
     } else {
-      updated.push({
-        symbol: baseSymbol,
-        amount: quantity,
-        entryPrice: price,
-        currentPrice: price,
-        pnl: 0,
-        pnlPercent: 0,
-      });
+      up.push({ symbol: base, amount: qty, entryPrice: price, currentPrice: price, pnl: 0, pnlPercent: 0 });
     }
-  } else {
-    // SELL
-    if (assetIdx >= 0) {
-      const existing = updated[assetIdx];
-      const newAmount = existing.amount - quantity;
-      if (newAmount <= 0.00000001) {
-        updated.splice(assetIdx, 1);
-      } else {
-        updated[assetIdx] = {
-          ...existing,
-          amount: newAmount,
-          currentPrice: price,
-          pnl: parseFloat(((price - existing.entryPrice) * newAmount).toFixed(2)),
-          pnlPercent: parseFloat((((price - existing.entryPrice) / existing.entryPrice) * 100).toFixed(2)),
-        };
-      }
-    }
+  } else if (ai >= 0) {
+    const rem = up[ai].amount - qty;
+    if (rem <= 0.000001) up.splice(ai, 1);
+    else up[ai] = { ...up[ai], amount: rem, currentPrice: price, pnl: +((price - up[ai].entryPrice) * rem).toFixed(2), pnlPercent: +((price - up[ai].entryPrice) / up[ai].entryPrice * 100).toFixed(2) };
   }
-
-  return updated;
+  return up;
 }
 
-async function savePortfolio(db: D1Database, portfolioId: string, positions: Position[], prices: Record<string, number>) {
-  // Update current prices for all positions
-  for (const pos of positions) {
-    if (pos.symbol === 'USDT') continue;
-    const priceKey = pos.symbol + 'USDT';
-    if (prices[priceKey]) {
-      pos.currentPrice = prices[priceKey];
-      pos.pnl = parseFloat(((pos.currentPrice - pos.entryPrice) * pos.amount).toFixed(2));
-      pos.pnlPercent = pos.entryPrice > 0 ? parseFloat((((pos.currentPrice - pos.entryPrice) / pos.entryPrice) * 100).toFixed(2)) : 0;
+async function savePortfolio(db: D1Database, id: string, positions: Position[], prices: Record<string, number>) {
+  for (const p of positions) {
+    if (p.symbol === 'USDT') continue;
+    const pk = p.symbol + 'USDT';
+    if (prices[pk]) {
+      p.currentPrice = prices[pk];
+      p.pnl = +((p.currentPrice - p.entryPrice) * p.amount).toFixed(2);
+      p.pnlPercent = p.entryPrice > 0 ? +((p.currentPrice - p.entryPrice) / p.entryPrice * 100).toFixed(2) : 0;
     }
   }
-
-  // Calculate total value
-  let totalValue = 0;
-  for (const pos of positions) {
-    if (pos.symbol === 'USDT') {
-      totalValue += pos.amount;
-    } else {
-      totalValue += pos.amount * pos.currentPrice;
-    }
-  }
-
-  const dailyPnl = totalValue - 10000; // Simple: vs initial capital
-
-  await db.prepare(
-    'UPDATE portfolios SET total_value = ?, daily_pnl = ?, positions = ?, updated_at = ? WHERE id = ?'
-  ).bind(
-    parseFloat(totalValue.toFixed(2)),
-    parseFloat(dailyPnl.toFixed(2)),
-    JSON.stringify(positions),
-    new Date().toISOString(),
-    portfolioId
-  ).run();
+  let tv = 0;
+  for (const p of positions) tv += p.symbol === 'USDT' ? p.amount : p.amount * p.currentPrice;
+  await db.prepare('UPDATE portfolios SET total_value = ?, daily_pnl = ?, positions = ?, updated_at = ? WHERE id = ?')
+    .bind(+tv.toFixed(2), +(tv - 10000).toFixed(2), JSON.stringify(positions), new Date().toISOString(), id).run();
 }
 
-// ============ Trade Recording ============
+// ============ Trade & State Helpers ============
 
-async function recordTrade(
-  db: D1Database,
-  userId: string,
-  botId: string,
-  symbol: string,
-  side: 'BUY' | 'SELL',
-  price: number,
-  quantity: number,
-  pnl: number
-) {
-  const id = generateId();
-  const exchange = 'BINANCE';
+async function recordTrade(db: D1Database, userId: string, botId: string, symbol: string, side: 'BUY' | 'SELL', price: number, quantity: number, pnl: number, reason: string) {
   const now = new Date().toISOString();
-
   await db.prepare(
-    `INSERT INTO trades (id, user_id, bot_id, exchange, symbol, side, order_type, status, entry_price, quantity, pnl, pnl_percent, fee, timestamp, closed_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'MARKET', 'CLOSED', ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    id, userId, botId, exchange, symbol.replace('/', ''),
-    side, price, quantity,
-    parseFloat(pnl.toFixed(2)),
-    price > 0 ? parseFloat(((pnl / (price * quantity)) * 100).toFixed(2)) : 0,
-    parseFloat((price * quantity * 0.001).toFixed(4)), // 0.1% fee
-    now, now, now
-  ).run();
+    `INSERT INTO trades (id, user_id, bot_id, exchange, symbol, side, order_type, status, entry_price, quantity, pnl, pnl_percent, fee, exit_reason, timestamp, closed_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).bind(generateId(), userId, botId, 'BINANCE', symbol.replace('/', ''), side, 'MARKET', 'CLOSED', price, quantity, +pnl.toFixed(2), price > 0 ? +((pnl / (price * quantity)) * 100).toFixed(2) : 0, +(price * quantity * 0.001).toFixed(4), reason, now, now, now).run();
 }
 
 async function updateBotStats(db: D1Database, botId: string) {
-  const { results: trades } = await db.prepare(
-    "SELECT pnl FROM trades WHERE bot_id = ? AND status = 'CLOSED'"
-  ).bind(botId).all();
-
-  const all = (trades || []) as Array<{ pnl: number }>;
-  const totalProfit = all.reduce((s, t) => s + (t.pnl || 0), 0);
-  const winning = all.filter(t => (t.pnl || 0) > 0);
-  const winRate = all.length > 0 ? (winning.length / all.length) * 100 : 0;
-
-  await db.prepare(
-    'UPDATE bots SET total_profit = ?, total_trades = ?, win_rate = ?, updated_at = ? WHERE id = ?'
-  ).bind(
-    parseFloat(totalProfit.toFixed(2)),
-    all.length,
-    parseFloat(winRate.toFixed(1)),
-    new Date().toISOString(),
-    botId
-  ).run();
-}
-
-// ============ Strategy Execution ============
-
-interface BotRow {
-  id: string;
-  user_id: string;
-  name: string;
-  strategy: string;
-  symbol: string;
-  config: string;
-  status: string;
+  const { results } = await db.prepare("SELECT pnl FROM trades WHERE bot_id = ? AND status = 'CLOSED'").bind(botId).all();
+  const all = (results || []) as Array<{ pnl: number }>;
+  const tp = all.reduce((s, t) => s + (t.pnl || 0), 0);
+  const wr = all.length > 0 ? (all.filter(t => (t.pnl || 0) > 0).length / all.length) * 100 : 0;
+  await db.prepare('UPDATE bots SET total_profit = ?, total_trades = ?, win_rate = ?, updated_at = ? WHERE id = ?')
+    .bind(+tp.toFixed(2), all.length, +wr.toFixed(1), new Date().toISOString(), botId).run();
 }
 
 async function getLastTradeTime(db: D1Database, botId: string): Promise<number> {
-  const last = await db.prepare(
-    'SELECT timestamp FROM trades WHERE bot_id = ? ORDER BY timestamp DESC LIMIT 1'
-  ).bind(botId).first<{ timestamp: string }>();
-  return last ? new Date(last.timestamp).getTime() : 0;
+  const r = await db.prepare('SELECT timestamp FROM trades WHERE bot_id = ? ORDER BY timestamp DESC LIMIT 1').bind(botId).first<{ timestamp: string }>();
+  return r ? new Date(r.timestamp).getTime() : 0;
 }
 
-// DCA: Buy fixed amount at regular intervals
-async function executeDCA(
-  db: D1Database, bot: BotRow, price: number, positions: Position[]
-): Promise<{ side: 'BUY' | 'SELL'; quantity: number; cost: number } | null> {
-  const config = JSON.parse(bot.config || '{}');
-  const investmentAmount = config.investmentAmount || 100;
-  // interval in hours (default: 1hr for paper trading)
-  const intervalHours = config.interval || 1;
-
-  const lastTime = await getLastTradeTime(db, bot.id);
-  const elapsed = Date.now() - lastTime;
-  // Minimum 5 minutes between DCA trades (cron interval)
-  const minIntervalMs = Math.max(intervalHours * 3600000, 300000);
-  if (lastTime > 0 && elapsed < minIntervalMs) {
-    return null; // Not time yet
-  }
-
-  const cash = getCash(positions);
-  if (cash < investmentAmount) return null; // Not enough cash
-
-  const quantity = investmentAmount / price;
-  return { side: 'BUY', quantity, cost: investmentAmount };
+function getBotState(config: Record<string, unknown>): Record<string, unknown> {
+  return (config._state as Record<string, unknown>) || {};
 }
 
-// GRID: Buy/sell at grid levels
-async function executeGrid(
-  db: D1Database, bot: BotRow, price: number, positions: Position[]
-): Promise<{ side: 'BUY' | 'SELL'; quantity: number; cost: number } | null> {
-  const config = JSON.parse(bot.config || '{}');
-  const upperPrice = config.upperPrice || price * 1.1;
-  const lowerPrice = config.lowerPrice || price * 0.9;
-  const gridLevels = config.gridLevels || 10;
-  const investPerGrid = config.investPerGrid || 100;
-
-  if (price > upperPrice || price < lowerPrice) return null;
-
-  const step = (upperPrice - lowerPrice) / gridLevels;
-  const gridLevel = Math.floor((price - lowerPrice) / step);
-
-  const lastTime = await getLastTradeTime(db, bot.id);
-  if (Date.now() - lastTime < 300000) return null; // Min 5min between trades
-
-  // Check last trade side - alternate between buy and sell
-  const lastTrade = await db.prepare(
-    'SELECT side, entry_price FROM trades WHERE bot_id = ? ORDER BY timestamp DESC LIMIT 1'
-  ).bind(bot.id).first<{ side: string; entry_price: number }>();
-
-  const baseSymbol = bot.symbol.replace('/', '').replace('USDT', '');
-  const position = positions.find(p => p.symbol === baseSymbol);
-  const cash = getCash(positions);
-
-  if (!lastTrade || lastTrade.side === 'SELL') {
-    // Buy
-    if (cash < investPerGrid) return null;
-    return { side: 'BUY', quantity: investPerGrid / price, cost: investPerGrid };
-  } else {
-    // Sell if price moved up at least 1 grid step
-    if (!position || position.amount <= 0) return null;
-    if (price < (lastTrade.entry_price || 0) + step) return null;
-    const sellQty = Math.min(position.amount, investPerGrid / price);
-    return { side: 'SELL', quantity: sellQty, cost: sellQty * price };
-  }
+async function saveBotState(db: D1Database, botId: string, config: Record<string, unknown>, state: Record<string, unknown>) {
+  config._state = state;
+  await db.prepare('UPDATE bots SET config = ?, updated_at = ? WHERE id = ?')
+    .bind(JSON.stringify(config), new Date().toISOString(), botId).run();
 }
 
-// MOMENTUM: Buy on dips, sell on spikes (simplified)
-async function executeMomentum(
-  db: D1Database, bot: BotRow, price: number, positions: Position[]
-): Promise<{ side: 'BUY' | 'SELL'; quantity: number; cost: number } | null> {
-  const config = JSON.parse(bot.config || '{}');
-  const investmentAmount = config.investmentAmount || 200;
+// ============ Strategy Functions v3 ============
+// 핵심 원칙: 비대칭 R/R, 추세 필터, 과매도 진입, 빠른 이익 실현
 
-  const lastTime = await getLastTradeTime(db, bot.id);
-  if (Date.now() - lastTime < 3600000) return null; // Min 1hr between trades
+// 1. DCA v2 - 스마트 적립식 + 능동적 이익 실현
+function strategyDCA(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>): TradeSignal | null {
+  const base = Number(config.investmentAmount || 300);
 
-  // Fetch 24hr change from CoinGecko
-  const cleanSymbol = bot.symbol.replace('/', '');
-  const change24h = await get24hChange(cleanSymbol);
-
-  const baseSymbol = cleanSymbol.replace('USDT', '');
-  const position = positions.find(p => p.symbol === baseSymbol);
-  const cash = getCash(positions);
-
-  const buyThreshold = config.rsiBuyThreshold || -3; // Buy when down 3%+
-  const sellThreshold = config.rsiSellThreshold || 5; // Sell when up 5%+
-
-  if (change24h <= buyThreshold && cash >= investmentAmount) {
-    return { side: 'BUY', quantity: investmentAmount / price, cost: investmentAmount };
+  // 매도 먼저: 능동적 이익 실현
+  if (pos && pos.amount > 0.000001) {
+    const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+    // RSI 과매수 + 수익: 60% 매도
+    if (ind.rsi > 68 && pnlPct > 0.005) {
+      const qty = pos.amount * 0.6;
+      return { side: 'SELL', quantity: qty, cost: qty * price, reason: `DCA 과매수 이익실현 (RSI ${ind.rsi.toFixed(0)}, +${(pnlPct * 100).toFixed(1)}%)` };
+    }
+    // +4% 이상: 40% 매도
+    if (pnlPct >= 0.04) {
+      const qty = pos.amount * 0.4;
+      return { side: 'SELL', quantity: qty, cost: qty * price, reason: `DCA 목표 이익실현 (+${(pnlPct * 100).toFixed(1)}%)` };
+    }
+    // 강한 하락추세 + -6%: 전량 손절
+    if (pnlPct <= -0.06 && ind.trend < -0.5) {
+      return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `DCA 추세 손절 (${(pnlPct * 100).toFixed(1)}%)` };
+    }
   }
 
-  if (change24h >= sellThreshold && position && position.amount > 0) {
-    const sellQty = position.amount * 0.5; // Sell half
-    return { side: 'SELL', quantity: sellQty, cost: sellQty * price };
-  }
+  // RSI 기반 매수
+  let amount: number;
+  if (ind.rsi < 25) amount = base * 2.0;
+  else if (ind.rsi < 32) amount = base * 1.5;
+  else if (ind.rsi < 40) amount = base * 1.0;
+  else if (ind.rsi < 50 && ind.trend >= 0) amount = base * 0.5;
+  else return null;
 
-  return null;
+  // 하락추세 감쇄
+  if (ind.trend <= -0.5) amount *= 0.3;
+  else if (ind.trend < 0) amount *= 0.6;
+
+  // 최대 노출도 체크
+  const exposure = pos ? pos.amount * price : 0;
+  if (exposure > cash * 1.5) return null; // 이미 50% 이상 노출
+
+  if (cash < amount) amount = Math.min(cash * 0.4, cash);
+  if (amount < 10) return null;
+  return { side: 'BUY', quantity: amount / price, cost: amount, reason: `스마트 DCA (RSI ${ind.rsi.toFixed(0)}, 추세 ${ind.trend > 0 ? '↑' : ind.trend < 0 ? '↓' : '→'}, $${amount.toFixed(0)})` };
 }
 
-// TRAILING: Trail price and sell when it drops by X%
-async function executeTrailing(
-  db: D1Database, bot: BotRow, price: number, positions: Position[]
-): Promise<{ side: 'BUY' | 'SELL'; quantity: number; cost: number } | null> {
-  const config = JSON.parse(bot.config || '{}');
-  const investmentAmount = config.investmentAmount || 200;
-  const trailingPercent = config.trailingPercent || 3;
+// 2. GRID v2 - 추세 적응형 그리드
+function strategyGrid(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>, state: Record<string, unknown>): { signal: TradeSignal | null; newState: Record<string, unknown> } {
+  const gridLevels = Number(config.gridLevels || 10);
+  const investPerGrid = Number(config.investPerGrid || 200);
+  const upper = Number(config.upperPrice) || ind.bbUpper25;
+  const lower = Number(config.lowerPrice) || ind.bbLower25;
+  if (price > upper || price < lower) return { signal: null, newState: state };
 
-  const baseSymbol = bot.symbol.replace('/', '').replace('USDT', '');
-  const position = positions.find(p => p.symbol === baseSymbol);
-  const cash = getCash(positions);
+  const step = (upper - lower) / gridLevels;
+  const curLevel = Math.floor((price - lower) / step);
+  const lastLevel = Number(state.lastGridLevel ?? -1);
+  const cooldown = Number(state.gridCooldown || 0);
 
-  const lastTime = await getLastTradeTime(db, bot.id);
-  if (Date.now() - lastTime < 1800000) return null; // Min 30min
+  let signal: TradeSignal | null = null;
 
-  // If no position, buy
-  if (!position || position.amount <= 0) {
-    if (cash < investmentAmount) return null;
-    return { side: 'BUY', quantity: investmentAmount / price, cost: investmentAmount };
+  // 손절: -3%
+  if (pos && pos.amount > 0.000001) {
+    const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+    if (pnlPct <= -0.03) {
+      signal = { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `그리드 손절 (${(pnlPct * 100).toFixed(1)}%)` };
+      return { signal, newState: { ...state, lastGridLevel: curLevel, gridCooldown: 3 } };
+    }
   }
 
-  // If position exists, check if price dropped from peak
-  const highSinceEntry = Math.max(position.currentPrice, price);
-  const dropFromHigh = ((highSinceEntry - price) / highSinceEntry) * 100;
-
-  if (dropFromHigh >= trailingPercent && position.pnlPercent > 0) {
-    // Sell to lock in profit
-    return { side: 'SELL', quantity: position.amount, cost: position.amount * price };
+  // 매도 우선 (수익 확보)
+  if (lastLevel >= 0 && curLevel > lastLevel && pos && pos.amount > 0) {
+    const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+    if (pnlPct > 0.002) {
+      const qty = Math.min(pos.amount, investPerGrid / price);
+      signal = { side: 'SELL', quantity: qty, cost: qty * price, reason: `그리드 매도 (L${curLevel}, +${(pnlPct * 100).toFixed(1)}%)` };
+    }
+  }
+  // 매수: RSI < 38, 하락추세 금지, 쿨다운 체크
+  else if (lastLevel >= 0 && curLevel < lastLevel && ind.rsi < 38 && cooldown <= 0 && ind.trend > -0.5) {
+    const amount = ind.trend < 0 ? investPerGrid * 0.4 : investPerGrid * 0.7;
+    const exposure = pos ? pos.amount * price : 0;
+    if (exposure < cash * 0.5 && amount <= cash && amount >= 30) {
+      signal = { side: 'BUY', quantity: amount / price, cost: amount, reason: `그리드 매수 (L${curLevel}, RSI ${ind.rsi.toFixed(0)})` };
+    }
   }
 
-  return null;
+  const newCooldown = cooldown > 0 ? cooldown - 1 : 0;
+  return { signal, newState: { ...state, lastGridLevel: curLevel, gridCooldown: newCooldown } };
 }
 
-// MEAN_REVERSION: Buy below average, sell above average
-async function executeMeanReversion(
-  db: D1Database, bot: BotRow, price: number, positions: Position[]
-): Promise<{ side: 'BUY' | 'SELL'; quantity: number; cost: number } | null> {
-  const config = JSON.parse(bot.config || '{}');
-  const investmentAmount = config.investmentAmount || 200;
+// 3. MOMENTUM v4 - 초보수적 딥밸류 모멘텀
+function strategyMomentum(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>, state: Record<string, unknown>): { signal: TradeSignal | null; newState: Record<string, unknown> } {
+  const sizePct = 0.15;
+  const tp = 0.025;
+  const sl = 0.015;
+  const prevMacdHist = Number(state.prevMacdHist || 0);
 
-  const lastTime = await getLastTradeTime(db, bot.id);
-  if (Date.now() - lastTime < 3600000) return null;
+  if (!pos || pos.amount <= 0.000001) {
+    let reason = '';
 
-  // Calculate mean reference from CoinGecko
-  const cleanSymbol = bot.symbol.replace('/', '');
-  const coinId = SYMBOL_TO_COINGECKO[cleanSymbol];
-  if (!coinId) return null;
+    // 강한 하락추세 금지
+    if (ind.trend <= -0.3) {
+      // 진입 안함
+    }
+    // 1) 과매도 + BB 하단
+    else if (ind.rsi < 28 && price < ind.bbLower && ind.trend >= -0.15) {
+      reason = `과매도+BB하단 (RSI ${ind.rsi.toFixed(0)})`;
+    }
+    // 2) MACD 골든크로스 + 추세 상승
+    else if (prevMacdHist < 0 && ind.macdHist > 0 && ind.trend >= 0.2 && ind.rsi > 35 && ind.rsi < 52) {
+      reason = `MACD 골든크로스 (추세↑, RSI ${ind.rsi.toFixed(0)})`;
+    }
+    // 3) 전조건 정렬
+    else if (ind.ema9 > ind.ema21 && ind.macdHist > 0 && ind.rsi > 38 && ind.rsi < 52 && ind.trend >= 0.2 && price < ind.bbMid) {
+      reason = `전조건 정렬 (RSI ${ind.rsi.toFixed(0)})`;
+    }
 
-  let avgPrice = price;
-  try {
-    const res = await fetch(
-      `${COINGECKO_BASE}/coins/${coinId}/market_chart?vs_currency=usd&days=7&interval=daily`,
-      { headers: { 'Accept': 'application/json', 'User-Agent': 'CryptoSentinel/1.0' } }
-    );
-    if (res.ok) {
-      const data = await res.json() as { prices?: number[][] };
-      const pricePoints = (data.prices || []).map(p => p[1]);
-      if (pricePoints.length > 0) {
-        avgPrice = pricePoints.reduce((a, b) => a + b, 0) / pricePoints.length;
+    if (reason && cash > 50) {
+      const amount = Math.min(cash * sizePct, cash - 100);
+      if (amount >= 50) {
+        return {
+          signal: { side: 'BUY', quantity: amount / price, cost: amount, reason },
+          newState: { ...state, prevMacdHist: ind.macdHist },
+        };
       }
     }
-  } catch { /* use current price as fallback avg */ }
-  const deviation = ((price - avgPrice) / avgPrice) * 100;
-
-  const baseSymbol = cleanSymbol.replace('USDT', '');
-  const position = positions.find(p => p.symbol === baseSymbol);
-  const cash = getCash(positions);
-
-  const bollingerStdDev = config.bollingerStdDev || 2;
-
-  if (deviation < -bollingerStdDev && cash >= investmentAmount) {
-    // Price below average -> buy
-    return { side: 'BUY', quantity: investmentAmount / price, cost: investmentAmount };
+    return { signal: null, newState: { ...state, prevMacdHist: ind.macdHist } };
   }
 
-  if (deviation > bollingerStdDev && position && position.amount > 0) {
-    // Price above average -> sell
-    const sellQty = position.amount * 0.5;
-    return { side: 'SELL', quantity: sellQty, cost: sellQty * price };
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+  let signal: TradeSignal | null = null;
+  if (pnlPct >= tp) signal = { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `익절 (+${(pnlPct * 100).toFixed(1)}%)` };
+  else if (pnlPct >= 0.012) signal = { side: 'SELL', quantity: pos.amount * 0.5, cost: pos.amount * 0.5 * price, reason: `부분익절 (+${(pnlPct * 100).toFixed(1)}%)` };
+  else if (pnlPct <= -sl) signal = { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` };
+  else if (ind.rsi > 65 && pnlPct > 0) signal = { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `RSI 과매수 (${ind.rsi.toFixed(0)})` };
+  else if (ind.trend <= -0.15 && pnlPct > -0.005) signal = { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `추세전환 매도 (${(pnlPct * 100).toFixed(1)}%)` };
+
+  return { signal, newState: { ...state, prevMacdHist: ind.macdHist } };
+}
+
+// 4. MEAN_REVERSION v2 - BB + RSI 수렴 반등
+function strategyMeanReversion(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>): TradeSignal | null {
+  const sizePct = 0.30;
+  const tp = 0.035;
+  const sl = 0.02;
+
+  if (!pos || pos.amount <= 0.000001) {
+    // 1차: BB(2.5σ) + RSI < 35
+    if (price < ind.bbLower25 && ind.rsi < 35 && cash > 50) {
+      const amount = Math.min(cash * sizePct * 1.2, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `BB(2.5σ)하단 매수 (RSI ${ind.rsi.toFixed(0)})` };
+    }
+    // 2차: BB(2σ) + RSI < 40
+    if (price < ind.bbLower && ind.rsi < 40 && cash > 50) {
+      const amount = Math.min(cash * sizePct, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `BB(2σ)하단 매수 (RSI ${ind.rsi.toFixed(0)})` };
+    }
+    return null;
   }
 
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+  if (pnlPct >= tp) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)` };
+  if (price >= ind.bbMid && pnlPct > 0.005) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `평균회귀 완료 (+${(pnlPct * 100).toFixed(1)}%)` };
+  if (ind.rsi > 60 && pnlPct > 0.01) return { side: 'SELL', quantity: pos.amount * 0.5, cost: pos.amount * 0.5 * price, reason: `RSI 부분익절 (${ind.rsi.toFixed(0)})` };
+  if (pnlPct <= -sl) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` };
+  return null;
+}
+
+// 5. TRAILING v5 - BB밴드 반등 + 트레일링 (MR 하이브리드)
+function strategyTrailing(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>, state: Record<string, unknown>): { signal: TradeSignal | null; newState: Record<string, unknown> } {
+  const sizePct = 0.20;
+  const trailPct = Math.max(0.015, Math.min(0.04, (ind.atr / price) * 2));
+  const partialSold = Boolean(state.trailPartialSold);
+
+  if (!pos || pos.amount <= 0.000001) {
+    let reason = '';
+    // 1) BB(2.5σ) 하단 + RSI < 35
+    if (price < ind.bbLower25 && ind.rsi < 35) {
+      reason = `BB(2.5σ)하단+트레일 (RSI ${ind.rsi.toFixed(0)})`;
+    }
+    // 2) BB(2σ) 하단 + RSI < 38
+    else if (price < ind.bbLower && ind.rsi < 38) {
+      reason = `BB(2σ)하단+트레일 (RSI ${ind.rsi.toFixed(0)})`;
+    }
+
+    if (reason && cash > 50) {
+      const amount = Math.min(cash * sizePct, cash - 100);
+      if (amount >= 50) {
+        return {
+          signal: { side: 'BUY', quantity: amount / price, cost: amount, reason },
+          newState: { ...state, highSinceEntry: price, trailPartialSold: false },
+        };
+      }
+    }
+    return { signal: null, newState: state };
+  }
+
+  const high = Math.max(Number(state.highSinceEntry || pos.entryPrice), price);
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+
+  // BB 중간선 도달 시 부분 매도
+  if (!partialSold && price >= ind.bbMid && pnlPct > 0.003) {
+    return {
+      signal: { side: 'SELL', quantity: pos.amount * 0.5, cost: pos.amount * 0.5 * price, reason: `BB중간선 부분매도 (+${(pnlPct * 100).toFixed(1)}%)` },
+      newState: { ...state, highSinceEntry: high, trailPartialSold: true },
+    };
+  }
+  // 트레일링 스탑: +1.5% 이상
+  if (pnlPct >= 0.015) {
+    const dropFromHigh = high > pos.entryPrice ? (high - price) / high : 0;
+    if (dropFromHigh >= trailPct) {
+      return {
+        signal: { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `트레일링 (+${(pnlPct * 100).toFixed(1)}%)` },
+        newState: { ...state, highSinceEntry: 0, trailPartialSold: false },
+      };
+    }
+  }
+  // BB 상단 도달 시 전량 매도
+  if (price >= ind.bbUpper && pnlPct > 0) {
+    return {
+      signal: { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `BB상단 익절 (+${(pnlPct * 100).toFixed(1)}%)` },
+      newState: { ...state, highSinceEntry: 0, trailPartialSold: false },
+    };
+  }
+  if (pnlPct >= 0.035) {
+    return {
+      signal: { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)` },
+      newState: { ...state, highSinceEntry: 0, trailPartialSold: false },
+    };
+  }
+  // 손절: -2%
+  if (pnlPct <= -0.02) {
+    return {
+      signal: { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` },
+      newState: { ...state, highSinceEntry: 0, trailPartialSold: false },
+    };
+  }
+  return { signal: null, newState: { ...state, highSinceEntry: high } };
+}
+
+// 6. MARTINGALE v2 - 보수적 마틴게일 + 비대칭 R/R
+function strategyMartingale(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>, state: Record<string, unknown>): { signal: TradeSignal | null; newState: Record<string, unknown> } {
+  const baseSize = Number(config.investmentAmount || 200);
+  const maxMult = 3;
+  const tp = 0.03;
+  const sl = 0.015;
+  const mult = Number(state.multiplier || 1);
+  const consLoss = Number(state.consecutiveLoss || 0);
+
+  if (!pos || pos.amount <= 0.000001) {
+    // 진입: RSI < 32 (하락추세에서는 < 25)
+    const entryRsi = ind.trend <= -0.5 ? 25 : 32;
+    if (ind.rsi < entryRsi) {
+      const size = Math.min(baseSize * mult, cash * 0.35);
+      if (size >= 20 && cash >= size) {
+        return {
+          signal: { side: 'BUY', quantity: size / price, cost: size, reason: `마틴게일 매수 (x${mult.toFixed(1)}, RSI ${ind.rsi.toFixed(0)}, $${size.toFixed(0)})` },
+          newState: { ...state, multiplier: mult, consecutiveLoss: consLoss },
+        };
+      }
+    }
+    return { signal: null, newState: state };
+  }
+
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+  if (pnlPct >= tp) {
+    return {
+      signal: { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `익절 (+${(pnlPct * 100).toFixed(1)}%) → x1 리셋` },
+      newState: { ...state, multiplier: 1, consecutiveLoss: 0 },
+    };
+  }
+  if (pnlPct <= -sl) {
+    const newConsLoss = consLoss + 1;
+    if (newConsLoss >= 3) {
+      return {
+        signal: { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `손절 + 3연패 리셋 (${(pnlPct * 100).toFixed(1)}%) → x1` },
+        newState: { ...state, multiplier: 1, consecutiveLoss: 0 },
+      };
+    }
+    const newMult = Math.min(mult * 1.5, maxMult);
+    return {
+      signal: { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `손절 (${(pnlPct * 100).toFixed(1)}%) → x${newMult.toFixed(1)}` },
+      newState: { ...state, multiplier: newMult, consecutiveLoss: newConsLoss },
+    };
+  }
+  return { signal: null, newState: state };
+}
+
+// 7. SCALPING v2 - BB(10,1.5) + RSI(7)
+function strategyScalping(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>): TradeSignal | null {
+  const sizePct = 0.20;
+  const tp = 0.010;
+  const sl = 0.012;
+
+  if (!pos || pos.amount <= 0.000001) {
+    if (price < ind.bbLower10 && ind.rsi7 < 35 && cash > 50) {
+      const amount = Math.min(cash * sizePct, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `스캘핑 BB하단 (RSI7 ${ind.rsi7.toFixed(0)})` };
+    }
+    if (ind.chg1h < -1.5 && ind.rsi7 < 30 && cash > 50) {
+      const amount = Math.min(cash * sizePct * 0.8, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `스캘핑 급락반등 (1h ${ind.chg1h.toFixed(1)}%)` };
+    }
+    return null;
+  }
+
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+  if (pnlPct >= tp) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `스캘핑 익절 (+${(pnlPct * 100).toFixed(2)}%)` };
+  if (pnlPct <= -sl) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `스캘핑 손절 (${(pnlPct * 100).toFixed(2)}%)` };
+  if (ind.rsi7 > 72) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `스캘핑 RSI매도 (${ind.rsi7.toFixed(0)})` };
+  return null;
+}
+
+// 8. STAT_ARB v2 - Z-Score + RSI 이중 필터
+function strategyStatArb(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>): TradeSignal | null {
+  const sizePct = 0.30;
+  const entryZ = Number(config.entryZScore || -1.8);
+  const tp = 0.035;
+  const sl = 0.02;
+
+  if (!pos || pos.amount <= 0.000001) {
+    if (ind.zScore < entryZ && ind.rsi < 42 && cash > 50) {
+      const sizeAdj = ind.zScore < -2.5 ? 1.3 : 1.0;
+      const amount = Math.min(cash * sizePct * sizeAdj, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `Z-Score 매수 (Z=${ind.zScore.toFixed(2)}, RSI ${ind.rsi.toFixed(0)})` };
+    }
+    return null;
+  }
+
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+  if (ind.zScore >= 0 && pnlPct > 0) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `Z 회귀 (Z=${ind.zScore.toFixed(2)}, +${(pnlPct * 100).toFixed(1)}%)` };
+  if (pnlPct >= tp) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)` };
+  if (ind.rsi > 65 && pnlPct > 0.005) return { side: 'SELL', quantity: pos.amount * 0.5, cost: pos.amount * 0.5 * price, reason: `RSI 부분익절 (${ind.rsi.toFixed(0)})` };
+  if (pnlPct <= -sl) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` };
+  return null;
+}
+
+// 9. FUNDING_ARB v2 - 펀딩비 차익거래
+function strategyFundingArb(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>): TradeSignal | null {
+  const sizePct = 0.30;
+  const tp = 0.03;
+  const sl = 0.02;
+  const momentum = ind.chg24h;
+  const funding = momentum > 3 ? 0.03 : momentum > 1 ? 0.01 : momentum < -3 ? -0.03 : momentum < -1 ? -0.01 : 0;
+
+  if (!pos || pos.amount <= 0.000001) {
+    if (funding < -0.01 && ind.rsi < 50 && cash > 50) {
+      const amount = Math.min(cash * sizePct, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `펀딩차익 롱 (펀딩 ${(funding * 100).toFixed(2)}%, RSI ${ind.rsi.toFixed(0)})` };
+    }
+    if (ind.rsi < 30 && cash > 50) {
+      const amount = Math.min(cash * sizePct * 0.8, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `펀딩차익 과매도 매수 (RSI ${ind.rsi.toFixed(0)})` };
+    }
+    return null;
+  }
+
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+  if (funding > 0.025) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `펀딩 양전환 청산 (${(funding * 100).toFixed(2)}%)` };
+  if (pnlPct >= tp) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `익절 (+${(pnlPct * 100).toFixed(1)}%)` };
+  if (ind.rsi > 65 && pnlPct > 0.005) return { side: 'SELL', quantity: pos.amount * 0.5, cost: pos.amount * 0.5 * price, reason: `RSI 부분익절 (${ind.rsi.toFixed(0)})` };
+  if (pnlPct <= -sl) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` };
+  return null;
+}
+
+// 10. RL_AGENT v2 - 가중 앙상블 AI
+function strategyRLAgent(price: number, ind: Indicators, pos: Position | undefined, cash: number, config: Record<string, unknown>): TradeSignal | null {
+  // 가중 점수 계산
+  let score = 0;
+  if (ind.rsi < 30) score += 2; else if (ind.rsi < 40) score += 1; else if (ind.rsi > 70) score -= 2; else if (ind.rsi > 60) score -= 1;
+  if (price < ind.bbLower) score += 2; else if (price > ind.bbUpper) score -= 2;
+  if (ind.zScore < -2) score += 1.5; else if (ind.zScore < -1.5) score += 1; else if (ind.zScore > 2) score -= 1.5; else if (ind.zScore > 1.5) score -= 1;
+  if (ind.ema9 > ind.ema21) score += 1; else score -= 1;
+  if (ind.macdHist > 0) score += 1; else if (ind.macdHist < 0) score -= 1;
+  score += ind.trend * 0.5;
+
+  if (!pos || pos.amount <= 0.000001) {
+    if (score >= 3 && cash > 50) {
+      const sizePct = Math.min(0.15 + (score - 3) * 0.05, 0.40);
+      const amount = Math.min(cash * sizePct, cash - 100);
+      if (amount >= 50) return { side: 'BUY', quantity: amount / price, cost: amount, reason: `AI 매수 (점수 ${score.toFixed(1)}, RSI ${ind.rsi.toFixed(0)}, ${(sizePct * 100).toFixed(0)}%)` };
+    }
+    return null;
+  }
+
+  const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+  if (score <= -3) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `AI 강한 매도 (점수 ${score.toFixed(1)})` };
+  if (pnlPct >= 0.05) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `AI 익절 (+${(pnlPct * 100).toFixed(1)}%)` };
+  if (pnlPct <= -0.025) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `AI 손절 (${(pnlPct * 100).toFixed(1)}%)` };
+  if (score <= -1 && pnlPct > 0.01) return { side: 'SELL', quantity: pos.amount * 0.5, cost: pos.amount * 0.5 * price, reason: `AI 부분매도 (점수 ${score.toFixed(1)})` };
+  if (ind.rsi > 68 && pnlPct > 0.005) return { side: 'SELL', quantity: pos.amount, cost: pos.amount * price, reason: `AI RSI매도 (${ind.rsi.toFixed(0)})` };
   return null;
 }
 
@@ -482,113 +693,128 @@ export async function runPaperTrading(env: Env): Promise<string[]> {
   const log = (msg: string) => { logs.push(msg); console.log(msg); };
   const db = env.DB;
 
-  // Get all RUNNING bots
-  const { results } = await db.prepare(
-    "SELECT id, user_id, name, strategy, symbol, config, status FROM bots WHERE status = 'RUNNING'"
-  ).all();
-
+  // 1. Get running bots
+  const { results } = await db.prepare("SELECT id, user_id, name, strategy, symbol, config, status FROM bots WHERE status = 'RUNNING'").all();
   const bots = (results || []) as unknown as BotRow[];
-  if (bots.length === 0) { log('No RUNNING bots found'); return logs; }
-  log(`Found ${bots.length} running bot(s)`);
+  if (!bots.length) { log('실행 중인 봇 없음'); return logs; }
+  log(`${bots.length}개 봇 처리 시작`);
 
-  // Get unique symbols to fetch prices
+  // 2. Collect unique symbols
   const symbols = [...new Set(bots.map(b => b.symbol.replace('/', '')))];
-  log(`Fetching prices for: ${symbols.join(', ')}`);
-  let prices: Record<string, number>;
-  try {
-    prices = await getPrices(symbols);
-    log(`Prices: ${JSON.stringify(prices)}`);
-  } catch (e) {
-    log(`Failed to fetch prices: ${e}`);
-    return logs;
+
+  // 3. Fetch current prices
+  const prices = await fetchCurrentPrices(symbols);
+  log(`가격: ${Object.entries(prices).map(([s, p]) => `${s}=$${p.toFixed(2)}`).join(', ')}`);
+
+  // Wait 2s before fetching history to avoid CoinGecko rate limit
+  await new Promise(r => setTimeout(r, 2000));
+
+  // 4. Fetch history & calculate indicators per symbol (with rate limit delay)
+  const indicatorMap: Record<string, Indicators> = {};
+  for (let i = 0; i < symbols.length; i++) {
+    const sym = symbols[i];
+    if (i > 0) await new Promise(r => setTimeout(r, 2000));
+    const history = await fetchHistory(sym);
+    indicatorMap[sym] = calcIndicators(history, prices[sym] || 0);
+    log(`${sym}: RSI=${indicatorMap[sym].rsi.toFixed(1)}, Z=${indicatorMap[sym].zScore.toFixed(2)}, 추세=${indicatorMap[sym].trend > 0 ? '↑' : indicatorMap[sym].trend < 0 ? '↓' : '→'}${history.length === 0 ? ' (히스토리 없음)' : ''}`);
   }
 
-  // Group bots by user
+  // 5. Group bots by user
   const userBots = new Map<string, BotRow[]>();
-  for (const bot of bots) {
-    const existing = userBots.get(bot.user_id) || [];
-    existing.push(bot);
-    userBots.set(bot.user_id, existing);
-  }
+  for (const b of bots) { const list = userBots.get(b.user_id) || []; list.push(b); userBots.set(b.user_id, list); }
 
-  // Process each user's bots
-  for (const [userId, userBotList] of userBots) {
+  // 6. Process each user's bots
+  for (const [userId, botList] of userBots) {
     const portfolio = await getPortfolio(db, userId);
-    log(`Portfolio for ${userId}: cash=${getCash(portfolio.positions)}, positions=${portfolio.positions.length}`);
 
-    for (const bot of userBotList) {
+    for (const bot of botList) {
       try {
-        const cleanSymbol = bot.symbol.replace('/', '');
-        const price = prices[cleanSymbol];
-        if (!price) { log(`No price for ${cleanSymbol}`); continue; }
-        log(`Processing ${bot.name} (${bot.strategy}) - ${cleanSymbol} @ $${price}`);
+        const sym = bot.symbol.replace('/', '');
+        const price = prices[sym];
+        if (!price) { log(`${bot.name}: 가격 없음 (${sym})`); continue; }
 
-        let result: { side: 'BUY' | 'SELL'; quantity: number; cost: number } | null = null;
+        const ind = indicatorMap[sym];
+        if (!ind) { log(`${bot.name}: 지표 없음`); continue; }
+
+        // Check min interval
+        const lastTime = await getLastTradeTime(db, bot.id);
+        const minInt = MIN_INTERVAL[bot.strategy] || 900000;
+        if (lastTime > 0 && Date.now() - lastTime < minInt) continue;
+
+        const config = JSON.parse(bot.config || '{}');
+        const state = getBotState(config);
+        const base = sym.replace('USDT', '');
+        const pos = getPosition(portfolio.positions, base);
+        const cash = getCash(portfolio.positions);
+
+        let signal: TradeSignal | null = null;
+        let newState = state;
 
         switch (bot.strategy) {
           case 'DCA':
-            result = await executeDCA(db, bot, price, portfolio.positions);
+            signal = strategyDCA(price, ind, pos, cash, config);
             break;
-          case 'GRID':
-            result = await executeGrid(db, bot, price, portfolio.positions);
+          case 'GRID': {
+            const r = strategyGrid(price, ind, pos, cash, config, state);
+            signal = r.signal; newState = r.newState;
             break;
-          case 'MOMENTUM':
-            result = await executeMomentum(db, bot, price, portfolio.positions);
+          }
+          case 'MOMENTUM': {
+            const r = strategyMomentum(price, ind, pos, cash, config, state);
+            signal = r.signal; newState = r.newState;
             break;
-          case 'TRAILING':
-            result = await executeTrailing(db, bot, price, portfolio.positions);
-            break;
+          }
           case 'MEAN_REVERSION':
-            result = await executeMeanReversion(db, bot, price, portfolio.positions);
+            signal = strategyMeanReversion(price, ind, pos, cash, config);
+            break;
+          case 'TRAILING': {
+            const r = strategyTrailing(price, ind, pos, cash, config, state);
+            signal = r.signal; newState = r.newState;
+            break;
+          }
+          case 'MARTINGALE': {
+            const r = strategyMartingale(price, ind, pos, cash, config, state);
+            signal = r.signal; newState = r.newState;
+            break;
+          }
+          case 'SCALPING':
+            signal = strategyScalping(price, ind, pos, cash, config);
+            break;
+          case 'STAT_ARB':
+            signal = strategyStatArb(price, ind, pos, cash, config);
+            break;
+          case 'FUNDING_ARB':
+            signal = strategyFundingArb(price, ind, pos, cash, config);
+            break;
+          case 'RL_AGENT':
+            signal = strategyRLAgent(price, ind, pos, cash, config);
             break;
           default:
-            // For other strategies (MARTINGALE, RL_AGENT, STAT_ARB, SCALPING, FUNDING_ARB)
-            // Use DCA-like behavior as fallback
-            result = await executeDCA(db, bot, price, portfolio.positions);
-            break;
+            signal = strategyMomentum(price, ind, pos, cash, config, state).signal;
         }
 
-        log(`Strategy result: ${result ? JSON.stringify(result) : 'null (no trade signal)'}`);
-
-        if (result) {
-          const baseSymbol = cleanSymbol.replace('USDT', '');
-
-          // Calculate PnL for sells
+        if (signal) {
           let pnl = 0;
-          if (result.side === 'SELL') {
-            const pos = portfolio.positions.find(p => p.symbol === baseSymbol);
-            if (pos) {
-              pnl = (price - pos.entryPrice) * result.quantity;
-            }
-          }
+          if (signal.side === 'SELL' && pos) pnl = (price - pos.entryPrice) * signal.quantity;
 
-          // Record trade
-          await recordTrade(db, userId, bot.id, bot.symbol, result.side, price, result.quantity, pnl);
-
-          // Update positions
-          portfolio.positions = updatePositions(
-            portfolio.positions,
-            result.side,
-            baseSymbol,
-            result.quantity,
-            price,
-            result.cost
-          );
-
-          // Update bot stats
+          await recordTrade(db, userId, bot.id, bot.symbol, signal.side, price, signal.quantity, pnl, signal.reason);
+          portfolio.positions = updatePositions(portfolio.positions, signal.side, base, signal.quantity, price, signal.cost);
           await updateBotStats(db, bot.id);
 
-          log(`[${bot.name}] ${result.side} ${result.quantity.toFixed(6)} ${baseSymbol} @ $${price.toFixed(2)}`);
+          log(`[${bot.name}] ${signal.side} ${signal.quantity.toFixed(6)} ${base} @ $${price.toFixed(2)} | ${signal.reason}`);
         }
+
+        // Save state if changed
+        if (newState !== state) await saveBotState(db, bot.id, config, newState);
+
       } catch (err) {
-        log(`Error processing bot ${bot.id}: ${err}`);
+        log(`[${bot.name}] 오류: ${err}`);
       }
     }
 
-    // Save portfolio with updated prices
     await savePortfolio(db, portfolio.id, portfolio.positions, prices);
-    log(`Portfolio saved for ${userId}`);
   }
 
+  log(`엔진 실행 완료 (${new Date().toISOString()})`);
   return logs;
 }

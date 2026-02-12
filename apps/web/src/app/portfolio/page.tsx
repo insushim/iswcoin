@@ -8,26 +8,7 @@ import { cn, formatCurrency, formatPercent } from "@/lib/utils";
 import { usePortfolioStore } from "@/stores/portfolio.store";
 import { Wallet, TrendingUp, TrendingDown, PieChart } from "lucide-react";
 
-const DEMO_POSITIONS = [
-  { symbol: "BTC", amount: 0.45, entryPrice: 92000, currentPrice: 97523.45, pnl: 2485.55, pnlPercent: 5.99, allocation: 43.4 },
-  { symbol: "ETH", amount: 5.2, entryPrice: 3100, currentPrice: 3245.67, pnl: 757.48, pnlPercent: 4.70, allocation: 16.7 },
-  { symbol: "SOL", amount: 25.0, entryPrice: 180, currentPrice: 198.34, pnl: 458.50, pnlPercent: 10.19, allocation: 4.9 },
-  { symbol: "BNB", amount: 3.5, entryPrice: 640, currentPrice: 625.89, pnl: -49.39, pnlPercent: -2.20, allocation: 2.2 },
-  { symbol: "USDT", amount: 33245.00, entryPrice: 1, currentPrice: 1, pnl: 0, pnlPercent: 0, allocation: 32.8 },
-];
-
-const DEMO_ALLOCATION = [
-  { name: "BTC", value: 43888.55, color: "#f7931a" },
-  { name: "ETH", value: 16877.48, color: "#627eea" },
-  { name: "SOL", value: 4958.50, color: "#9945ff" },
-  { name: "BNB", value: 2190.62, color: "#f3ba2f" },
-  { name: "USDT", value: 33245.00, color: "#26a17b" },
-];
-
-const DEMO_HISTORY = Array.from({ length: 60 }, (_, i) => ({
-  date: new Date(Date.now() - (59 - i) * 86400000).toISOString(),
-  value: 95000 + i * 100 + Math.random() * 2000 - 800,
-}));
+const COIN_COLORS: Record<string, string> = { BTC: "#f7931a", ETH: "#627eea", SOL: "#9945ff", BNB: "#f3ba2f", USDT: "#26a17b" };
 
 export default function PortfolioPage() {
   const { summary, history, positions, fetchPortfolio, fetchHistory, fetchPositions } = usePortfolioStore();
@@ -38,15 +19,15 @@ export default function PortfolioPage() {
     fetchPositions().catch(() => {});
   }, [fetchPortfolio, fetchHistory, fetchPositions]);
 
-  const totalValue = summary?.totalValue ?? 101160.15;
-  const totalPnL = Number((summary as unknown as Record<string, unknown>)?.totalPnL ?? (summary as unknown as Record<string, unknown>)?.totalPnl ?? 3652.14);
-  const totalPnLPercent = summary?.totalPnLPercent ?? 3.75;
-  const dailyPnL = summary?.dailyPnL ?? 342.50;
-  const dailyPnLPercent = summary?.dailyPnLPercent ?? 0.34;
+  const totalValue = summary?.totalValue ?? 0;
+  const totalPnL = Number((summary as unknown as Record<string, unknown>)?.totalPnL ?? (summary as unknown as Record<string, unknown>)?.totalPnl ?? 0);
+  const totalPnLPercent = summary?.totalPnLPercent ?? 0;
+  const dailyPnL = summary?.dailyPnL ?? 0;
+  const dailyPnLPercent = summary?.dailyPnLPercent ?? 0;
 
-  const chartHistory = history.length > 0 ? history.map(h => ({ date: h.date, value: h.value })) : DEMO_HISTORY;
+  const chartHistory = history.length > 0 ? history.map(h => ({ date: h.date, value: h.value })) : [];
 
-  const displayPositions = positions.length > 0 ? positions.map((p) => {
+  const displayPositions = positions.map((p) => {
     const posValue = Number(p.currentPrice ?? 0) * Number(p.amount ?? 0);
     const totalVal = totalValue || 1;
     return {
@@ -58,14 +39,15 @@ export default function PortfolioPage() {
       pnlPercent: Number(p.pnlPercent ?? 0),
       allocation: Math.round((posValue / totalVal) * 1000) / 10,
     };
-  }) : DEMO_POSITIONS;
+  });
 
-  const displayAllocation = displayPositions.length > 0 && positions.length > 0
-    ? displayPositions.map((p) => {
-        const colors: Record<string, string> = { BTC: "#f7931a", ETH: "#627eea", SOL: "#9945ff", BNB: "#f3ba2f", USDT: "#26a17b" };
-        return { name: p.symbol, value: p.currentPrice * p.amount, color: colors[p.symbol] || "#6366f1" };
-      })
-    : DEMO_ALLOCATION;
+  const displayAllocation = displayPositions.length > 0
+    ? displayPositions.map((p) => ({
+        name: p.symbol,
+        value: p.currentPrice * p.amount,
+        color: COIN_COLORS[p.symbol] || "#6366f1",
+      }))
+    : [];
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -132,11 +114,23 @@ export default function PortfolioPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>포트폴리오 가치 (60일)</CardHeader>
-          <EquityCurve data={chartHistory} height={320} />
+          {chartHistory.length > 0 ? (
+            <EquityCurve data={chartHistory} height={320} />
+          ) : (
+            <div className="flex h-[320px] items-center justify-center text-sm text-slate-500">
+              봇을 실행하면 포트폴리오 히스토리가 표시됩니다
+            </div>
+          )}
         </Card>
         <Card>
           <CardHeader>자산 배분</CardHeader>
-          <AllocationPieChart data={displayAllocation} height={280} />
+          {displayAllocation.length > 0 ? (
+            <AllocationPieChart data={displayAllocation} height={280} />
+          ) : (
+            <div className="flex h-[280px] items-center justify-center text-sm text-slate-500">
+              포지션이 없습니다
+            </div>
+          )}
         </Card>
       </div>
 

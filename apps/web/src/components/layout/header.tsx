@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import { Bell, User, LogOut, Settings, ChevronDown } from "lucide-react";
 import { useAuthStore } from "@/stores/auth.store";
 
@@ -40,7 +41,7 @@ export function Header() {
   }, []);
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 backdrop-blur-md">
+    <header role="banner" className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 backdrop-blur-md">
       {/* Page title */}
       <h1 className="text-xl font-semibold text-white">{pageTitle}</h1>
 
@@ -50,6 +51,8 @@ export function Header() {
         <div ref={notifRef} className="relative">
           <button
             onClick={() => setShowNotifications(!showNotifications)}
+            aria-label="알림"
+            aria-expanded={showNotifications}
             className="relative rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
           >
             <Bell className="h-5 w-5" />
@@ -83,6 +86,8 @@ export function Header() {
         <div ref={dropdownRef} className="relative">
           <button
             onClick={() => setShowDropdown(!showDropdown)}
+            aria-label="사용자 메뉴"
+            aria-expanded={showDropdown}
             className="flex items-center gap-2 rounded-lg px-3 py-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
           >
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-700">
@@ -101,13 +106,13 @@ export function Header() {
                 <p className="text-xs text-slate-500">{user?.email || "user@example.com"}</p>
               </div>
               <div className="p-1">
-                <a
+                <Link
                   href="/settings"
                   className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
                 >
                   <Settings className="h-4 w-4" />
                   설정
-                </a>
+                </Link>
                 <button
                   onClick={logout}
                   className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-400 hover:bg-slate-800 transition-colors"

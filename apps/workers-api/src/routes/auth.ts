@@ -10,6 +10,12 @@ authRoutes.post('/register', async (c) => {
   const { email, password, name } = await parseJsonBody(c.req.raw) as { email: string; password: string; name?: string };
   if (!email || !password) return c.json({ error: 'Email and password required' }, 400);
 
+  // 입력 검증
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) return c.json({ error: 'Invalid email format' }, 400);
+  if (password.length < 8) return c.json({ error: 'Password must be at least 8 characters' }, 400);
+  if (name && name.length > 50) return c.json({ error: 'Name must be 50 characters or less' }, 400);
+
   const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (existing) return c.json({ error: 'Email already registered' }, 409);
 
@@ -29,6 +35,7 @@ authRoutes.post('/register', async (c) => {
 authRoutes.post('/login', async (c) => {
   const { email, password } = await parseJsonBody(c.req.raw) as { email: string; password: string };
   if (!email || !password) return c.json({ error: 'Email and password required' }, 400);
+  if (typeof email !== 'string' || typeof password !== 'string') return c.json({ error: 'Invalid input type' }, 400);
 
   const user = await c.env.DB.prepare('SELECT id, email, name, password_hash FROM users WHERE email = ?').bind(email).first<{ id: string; email: string; name: string; password_hash: string }>();
   if (!user) return c.json({ error: 'Invalid credentials' }, 401);
