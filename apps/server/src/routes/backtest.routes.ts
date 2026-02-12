@@ -1,16 +1,17 @@
 import { Router, type Response } from 'express';
 import { z } from 'zod';
-import ccxt from 'ccxt';
 import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { backtesterService, type BacktestConfig } from '../services/backtester.service.js';
+import { exchangeService } from '../services/exchange.service.js';
 import { indicatorsService } from '../services/indicators.service.js';
 import { getStrategy, type StrategyType } from '../strategies/index.js';
 import { logger } from '../utils/logger.js';
+import ccxt from 'ccxt';
 
 const router = Router();
 
-// ccxt 인스턴스 싱글턴 (매 요청마다 생성 방지)
+// ccxt 인스턴스 싱글턴
 let backtestExchange: import('ccxt').Exchange | null = null;
 function getBacktestExchange(): import('ccxt').Exchange {
   if (!backtestExchange) {
@@ -31,6 +32,13 @@ const runBacktestSchema = z.object({
   feePct: z.number().min(0).max(0.1).default(0.001),
   walkForwardSplit: z.number().min(0.5).max(0.9).default(0.7),
   botId: z.string().optional(),
+  // 신규 옵션: 멀티포지션, 숏, 동적슬리피지, 데이터 양
+  positionMode: z.enum(['single', 'accumulate']).default('single'),
+  shortEnabled: z.boolean().default(false),
+  maxPositionEntries: z.number().min(1).max(50).default(10),
+  allocationPct: z.number().min(1).max(100).optional(),
+  dynamicSlippage: z.boolean().default(false),
+  maxCandles: z.number().min(100).max(10000).default(1000),
 });
 
 router.use(authMiddleware);
@@ -47,14 +55,31 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
 
     const params = validation.data;
 
-    logger.info('Starting backtest', { userId, symbol: params.symbol, strategy: params.strategy });
+    logger.info('Starting backtest', {
+      userId,
+      symbol: params.symbol,
+      strategy: params.strategy,
+      positionMode: params.positionMode,
+      shortEnabled: params.shortEnabled,
+      maxCandles: params.maxCandles,
+    });
 
     const exchange = getBacktestExchange();
     const since = params.startDate ? new Date(params.startDate).getTime() : undefined;
-    const rawOhlcv = await exchange.fetchOHLCV(params.symbol, params.timeframe, since, 1000);
+    const until = params.endDate ? new Date(params.endDate).getTime() : undefined;
+
+    // 페이지네이션으로 대량 데이터 조회 (1000캔들 한계 돌파)
+    let rawOhlcv: import('ccxt').OHLCV[];
+    if (params.maxCandles > 1000) {
+      rawOhlcv = await exchangeService.fetchPaginatedOHLCV(
+        exchange, params.symbol, params.timeframe, since, until, params.maxCandles
+      );
+    } else {
+      rawOhlcv = await exchange.fetchOHLCV(params.symbol, params.timeframe, since, 1000);
+    }
 
     if (rawOhlcv.length < 50) {
-      res.status(400).json({ error: 'Insufficient data for backtest. Need at least 50 candles.' });
+      res.status(400).json({ error: `데이터 부족: ${rawOhlcv.length}캔들 (최소 50개 필요)` });
       return;
     }
 
@@ -63,7 +88,6 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
     );
 
     const strategyType = params.strategy as StrategyType;
-    const strategy = getStrategy(strategyType, params.strategyConfig);
 
     const config: BacktestConfig = {
       symbol: params.symbol,
@@ -72,13 +96,17 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
       endDate: params.endDate ?? new Date(rawOhlcv[rawOhlcv.length - 1]![0]!).toISOString(),
       initialCapital: params.initialCapital,
       strategy: params.strategy,
-      strategyConfig: params.strategyConfig ?? strategy.getDefaultConfig(),
+      strategyConfig: params.strategyConfig ?? getStrategy(strategyType).getDefaultConfig(),
       slippagePct: params.slippagePct,
       feePct: params.feePct,
       walkForwardSplit: params.walkForwardSplit,
+      positionMode: params.positionMode,
+      shortEnabled: params.shortEnabled,
+      maxPositionEntries: params.maxPositionEntries,
+      allocationPct: params.allocationPct,
+      dynamicSlippage: params.dynamicSlippage,
     };
 
-    // [FIX-3] 팩토리 함수 → Walk-forward 각 구간마다 독립 전략 인스턴스 생성
     const result = await backtesterService.runBacktest(
       config,
       ohlcvData,
@@ -108,6 +136,10 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
 
     res.json({
       id: saved.id,
+      config: {
+        ...config,
+        dataPoints: ohlcvData.length,
+      },
       metrics: result.metrics,
       trades: result.trades.slice(0, 50),
       equityCurve: sampleArray(result.equityCurve, 200),

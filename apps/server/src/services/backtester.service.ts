@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger.js';
 import { type OHLCVData } from './indicators.service.js';
 import type { TradeSignal } from '../strategies/base.strategy.js';
+import { slippageService } from './slippage.service.js';
 
 export interface BacktestConfig {
   symbol: string;
@@ -13,6 +14,30 @@ export interface BacktestConfig {
   slippagePct: number;
   feePct: number;
   walkForwardSplit: number;
+  // 멀티포지션 + 숏 + 동적슬리피지 옵션
+  positionMode?: 'single' | 'accumulate';   // single: 1포지션, accumulate: DCA 적립
+  shortEnabled?: boolean;                    // 숏(공매도) 허용
+  maxPositionEntries?: number;               // 적립 최대 횟수 (기본 10)
+  allocationPct?: number;                    // 회당 자본 배분% (기본: single=100, accumulate=20)
+  dynamicSlippage?: boolean;                 // ATR+거래량 기반 동적 슬리피지
+}
+
+// 포지션 엔트리
+interface PositionEntry {
+  price: number;
+  amount: number;
+  timestamp: number;
+}
+
+// 멀티엔트리 포지션 추적
+interface ActivePosition {
+  side: 'long' | 'short';
+  entries: PositionEntry[];
+  totalAmount: number;
+  avgEntryPrice: number;
+  totalCost: number;
+  firstEntryTime: number;
+  firstEntryCandle: number; // 최초 진입 캔들 인덱스
 }
 
 export interface BacktestTrade {
@@ -156,7 +181,7 @@ export class BacktesterService {
     data: OHLCVData[],
     config: BacktestConfig,
     analyzeFn: AnalyzeFunction,
-    slippage: number,
+    baseSlippage: number,
     fee: number,
     periodsPerYear: number
   ): {
@@ -166,114 +191,225 @@ export class BacktesterService {
     drawdownCurve: { timestamp: number; drawdown: number }[];
   } {
     let capital = config.initialCapital;
-    let position: { side: 'buy'; entryPrice: number; amount: number; entryTime: number } | null = null;
+    let position: ActivePosition | null = null;
     const trades: BacktestTrade[] = [];
     const equityCurve: { timestamp: number; equity: number }[] = [];
     const drawdownCurve: { timestamp: number; drawdown: number }[] = [];
     let peakEquity = capital;
 
     const lookback = 100;
+    const positionMode = config.positionMode ?? 'single';
+    const shortEnabled = config.shortEnabled ?? false;
+    const maxEntries = config.maxPositionEntries ?? 10;
+    const allocationPct = config.allocationPct ?? (positionMode === 'accumulate' ? 20 : 100);
+    const useDynamicSlippage = config.dynamicSlippage ?? false;
 
-    // [FIX-1] 미래 데이터 참조 방지: 신호는 현재 캔들 종가로 생성,
-    // 체결은 다음 캔들 시가로 실행 (실제 트레이딩과 동일)
     let pendingSignal: TradeSignal | null = null;
 
     for (let i = lookback; i < data.length; i++) {
       const currentCandle = data[i]!;
 
-      // 1단계: 이전 캔들에서 생성된 신호를 현재 캔들 시가로 체결
+      // ===== 1단계: 이전 캔들 신호 → 현재 캔들 시가로 체결 =====
       if (pendingSignal) {
         const openPrice = currentCandle.open;
 
-        if (pendingSignal.action === 'buy' && !position) {
-          const fillPrice = openPrice * (1 + slippage);
-          const tradeFee = capital * fee;
-          const availableCapital = capital - tradeFee;
-          const amount = availableCapital / fillPrice;
+        // 동적 슬리피지 계산
+        let slippage = baseSlippage;
+        if (useDynamicSlippage) {
+          const windowForSlippage = data.slice(Math.max(0, i - 30), i + 1);
+          const { currentATR, avgVolume } = slippageService.extractSlippageInputs(windowForSlippage);
+          const orderSize = capital * (allocationPct / 100);
+          slippage = slippageService.calculateDynamicSlippage(
+            baseSlippage, currentATR, openPrice, currentCandle.volume, avgVolume, orderSize
+          );
+        }
 
-          position = {
-            side: 'buy',
-            entryPrice: fillPrice,
-            amount,
-            entryTime: currentCandle.timestamp,
-          };
+        if (pendingSignal.action === 'buy') {
+          if (position?.side === 'short') {
+            // 숏 포지션 청산 (buy to cover)
+            capital = this.closePosition(position, openPrice, slippage, fee, trades, currentCandle.timestamp);
+            position = null;
+          }
 
-          capital = 0;
-        } else if (pendingSignal.action === 'sell' && position) {
-          const fillPrice = openPrice * (1 - slippage);
-          const proceeds = position.amount * fillPrice;
-          const tradeFee = proceeds * fee;
-          const pnl = proceeds - tradeFee - position.amount * position.entryPrice;
-          const pnlPercent = (pnl / (position.amount * position.entryPrice)) * 100;
+          if (!position) {
+            // 신규 롱 진입
+            const allocCapital = capital * (allocationPct / 100);
+            if (allocCapital > 0) {
+              const fillPrice = openPrice * (1 + slippage);
+              const tradeFee = allocCapital * fee;
+              const amount = (allocCapital - tradeFee) / fillPrice;
 
-          trades.push({
-            entryTime: position.entryTime,
-            exitTime: currentCandle.timestamp,
-            side: 'buy',
-            entryPrice: position.entryPrice,
-            exitPrice: fillPrice,
-            amount: position.amount,
-            pnl,
-            pnlPercent,
-            fee: tradeFee + position.amount * position.entryPrice * fee,
-          });
+              position = {
+                side: 'long',
+                entries: [{ price: fillPrice, amount, timestamp: currentCandle.timestamp }],
+                totalAmount: amount,
+                avgEntryPrice: fillPrice,
+                totalCost: allocCapital,
+                firstEntryTime: currentCandle.timestamp,
+                firstEntryCandle: i,
+              };
+              capital -= allocCapital;
+            }
+          } else if (position.side === 'long' && positionMode === 'accumulate' && position.entries.length < maxEntries) {
+            // DCA 적립: 기존 롱에 추가 진입
+            const allocCapital = capital * (allocationPct / 100);
+            if (allocCapital > 0) {
+              const fillPrice = openPrice * (1 + slippage);
+              const tradeFee = allocCapital * fee;
+              const amount = (allocCapital - tradeFee) / fillPrice;
 
-          capital = proceeds - tradeFee;
-          position = null;
+              position.entries.push({ price: fillPrice, amount, timestamp: currentCandle.timestamp });
+              position.totalAmount += amount;
+              position.totalCost += allocCapital;
+              position.avgEntryPrice = position.totalCost / position.totalAmount;
+              capital -= allocCapital;
+            }
+          }
+        } else if (pendingSignal.action === 'sell') {
+          if (position?.side === 'long') {
+            // 롱 포지션 전체 청산
+            capital = this.closePosition(position, openPrice, slippage, fee, trades, currentCandle.timestamp);
+            position = null;
+          } else if (!position && shortEnabled) {
+            // 신규 숏 진입
+            const allocCapital = capital * (allocationPct / 100);
+            if (allocCapital > 0) {
+              const fillPrice = openPrice * (1 - slippage);
+              const tradeFee = allocCapital * fee;
+              const amount = (allocCapital - tradeFee) / fillPrice;
+
+              position = {
+                side: 'short',
+                entries: [{ price: fillPrice, amount, timestamp: currentCandle.timestamp }],
+                totalAmount: amount,
+                avgEntryPrice: fillPrice,
+                totalCost: allocCapital,
+                firstEntryTime: currentCandle.timestamp,
+                firstEntryCandle: i,
+              };
+              capital -= allocCapital;
+            }
+          }
         }
 
         pendingSignal = null;
       }
 
-      // 2단계: 현재 캔들 종가 기준으로 equity 추적
-      // [FIX-5] 미실현 수익에 매도 수수료 반영
-      const currentEquity = position
-        ? position.amount * currentCandle.close * (1 - fee)
-        : capital;
-
-      if (currentEquity > peakEquity) {
-        peakEquity = currentEquity;
+      // ===== 2단계: equity 추적 (미실현 수수료 반영) =====
+      let currentEquity = capital;
+      if (position) {
+        if (position.side === 'long') {
+          currentEquity += position.totalAmount * currentCandle.close * (1 - fee);
+        } else {
+          // 숏: 진입가 - 현재가 차이가 수익
+          const shortPnl = (position.avgEntryPrice - currentCandle.close) * position.totalAmount;
+          const closeCost = position.totalAmount * currentCandle.close * fee;
+          currentEquity += position.totalCost + shortPnl - closeCost;
+        }
       }
 
+      if (currentEquity > peakEquity) peakEquity = currentEquity;
       const drawdown = peakEquity > 0 ? ((peakEquity - currentEquity) / peakEquity) * 100 : 0;
 
       equityCurve.push({ timestamp: currentCandle.timestamp, equity: currentEquity });
       drawdownCurve.push({ timestamp: currentCandle.timestamp, drawdown });
 
-      // 3단계: 현재 캔들 종가까지의 데이터로 신호 생성 (다음 캔들에서 체결)
+      // ===== 3단계: 전략에 포지션 컨텍스트 전달 + 신호 생성 =====
       const windowData = data.slice(Math.max(0, i - lookback), i + 1);
-      pendingSignal = analyzeFn(windowData, config.strategyConfig);
+
+      // 전략에 현재 포지션 정보를 enriched config로 전달
+      const enrichedConfig: Record<string, number> = { ...config.strategyConfig };
+      if (position) {
+        enrichedConfig['_hasPosition'] = 1;
+        enrichedConfig['_positionSide'] = position.side === 'long' ? 1 : -1;
+        enrichedConfig['_avgEntryPrice'] = position.avgEntryPrice;
+        enrichedConfig['_positionCount'] = position.entries.length;
+        enrichedConfig['_holdingCandles'] = i - position.firstEntryCandle;
+
+        const currentPrice = currentCandle.close;
+        if (position.side === 'long') {
+          enrichedConfig['_unrealizedPnlPct'] = ((currentPrice - position.avgEntryPrice) / position.avgEntryPrice) * 100;
+        } else {
+          enrichedConfig['_unrealizedPnlPct'] = ((position.avgEntryPrice - currentPrice) / position.avgEntryPrice) * 100;
+        }
+      } else {
+        enrichedConfig['_hasPosition'] = 0;
+        enrichedConfig['_positionSide'] = 0;
+        enrichedConfig['_avgEntryPrice'] = 0;
+        enrichedConfig['_positionCount'] = 0;
+        enrichedConfig['_holdingCandles'] = 0;
+        enrichedConfig['_unrealizedPnlPct'] = 0;
+      }
+
+      pendingSignal = analyzeFn(windowData, enrichedConfig);
     }
 
-    // [FIX-2] 강제청산 거래도 trades 배열에 기록
+    // ===== 강제청산 =====
     if (position && data.length > 0) {
       const lastCandle = data[data.length - 1]!;
-      const fillPrice = lastCandle.close * (1 - slippage);
-      const proceeds = position.amount * fillPrice;
-      const tradeFee = proceeds * fee;
-      const pnl = proceeds - tradeFee - position.amount * position.entryPrice;
-      const pnlPercent = (pnl / (position.amount * position.entryPrice)) * 100;
-
-      trades.push({
-        entryTime: position.entryTime,
-        exitTime: lastCandle.timestamp,
-        side: 'buy',
-        entryPrice: position.entryPrice,
-        exitPrice: fillPrice,
-        amount: position.amount,
-        pnl,
-        pnlPercent,
-        fee: tradeFee + position.amount * position.entryPrice * fee,
-      });
-
-      capital = proceeds - tradeFee;
+      capital = this.closePosition(position, lastCandle.close, baseSlippage, fee, trades, lastCandle.timestamp);
       position = null;
     }
 
-    // [FIX-4] 타임프레임 인식 연환산
     const metrics = this.calculateMetrics(trades, config.initialCapital, capital, equityCurve, periodsPerYear);
-
     return { metrics, trades, equityCurve, drawdownCurve };
+  }
+
+  /**
+   * 포지션 청산: 롱/숏 모두 지원, trades 배열에 기록, 회수 자본 반환
+   */
+  private closePosition(
+    position: ActivePosition,
+    marketPrice: number,
+    slippage: number,
+    fee: number,
+    trades: BacktestTrade[],
+    exitTimestamp: number
+  ): number {
+    if (position.side === 'long') {
+      const fillPrice = marketPrice * (1 - slippage);
+      const proceeds = position.totalAmount * fillPrice;
+      const tradeFee = proceeds * fee;
+      const entryCost = position.totalAmount * position.avgEntryPrice;
+      const pnl = proceeds - tradeFee - entryCost;
+      const pnlPercent = entryCost > 0 ? (pnl / entryCost) * 100 : 0;
+
+      trades.push({
+        entryTime: position.firstEntryTime,
+        exitTime: exitTimestamp,
+        side: 'buy',
+        entryPrice: position.avgEntryPrice,
+        exitPrice: fillPrice,
+        amount: position.totalAmount,
+        pnl,
+        pnlPercent,
+        fee: tradeFee + entryCost * fee,
+      });
+
+      return proceeds - tradeFee;
+    } else {
+      // 숏 청산: buy to cover
+      const fillPrice = marketPrice * (1 + slippage);
+      const coverCost = position.totalAmount * fillPrice;
+      const tradeFee = coverCost * fee;
+      const entryProceeds = position.totalAmount * position.avgEntryPrice;
+      const pnl = entryProceeds - coverCost - tradeFee;
+      const pnlPercent = entryProceeds > 0 ? (pnl / entryProceeds) * 100 : 0;
+
+      trades.push({
+        entryTime: position.firstEntryTime,
+        exitTime: exitTimestamp,
+        side: 'sell',
+        entryPrice: position.avgEntryPrice,
+        exitPrice: fillPrice,
+        amount: position.totalAmount,
+        pnl,
+        pnlPercent,
+        fee: tradeFee + entryProceeds * fee,
+      });
+
+      return position.totalCost + pnl;
+    }
   }
 
   private calculateMetrics(

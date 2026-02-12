@@ -400,6 +400,58 @@ export class ExchangeService {
     }
   }
 
+  /**
+   * 페이지네이션으로 대량 OHLCV 데이터 조회 (1000캔들 제한 돌파)
+   * 장기 백테스트를 위해 최대 10000캔들까지 지원
+   */
+  async fetchPaginatedOHLCV(
+    exchange: Exchange,
+    symbol: string,
+    timeframe: string,
+    since?: number,
+    until?: number,
+    maxCandles: number = 5000
+  ): Promise<OHLCV[]> {
+    const allCandles: OHLCV[] = [];
+    let currentSince = since;
+    const batchSize = 1000;
+    const safeMax = Math.min(maxCandles, 10000);
+
+    logger.info('Fetching paginated OHLCV', { symbol, timeframe, since, until, maxCandles: safeMax });
+
+    while (allCandles.length < safeMax) {
+      const cb = this.getCircuitBreaker(`ohlcv-paginated:${exchange.id ?? 'default'}`);
+
+      const batch = await cb.execute(() =>
+        withRetry(() => exchange.fetchOHLCV(symbol, timeframe, currentSince, batchSize), 2, 1000)
+      );
+
+      if (batch.length === 0) break;
+
+      // 종료일 필터링
+      const filtered = until
+        ? batch.filter(c => (c[0] ?? 0) <= until)
+        : batch;
+
+      allCandles.push(...filtered);
+
+      if (batch.length < batchSize) break; // 더 이상 데이터 없음
+      if (until && filtered.length < batch.length) break; // 종료일 도달
+
+      // 다음 페이지: 마지막 캔들 이후부터
+      const lastTimestamp = batch[batch.length - 1]![0] ?? 0;
+      currentSince = lastTimestamp + 1;
+
+      // 레이트 리밋 준수
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    const result = allCandles.slice(0, safeMax);
+    logger.info('Paginated OHLCV fetched', { symbol, timeframe, totalCandles: result.length });
+
+    return result;
+  }
+
   getExchangeNameFromEnum(exchangeEnum: string): SupportedExchange {
     const mapping: Record<string, SupportedExchange> = {
       BINANCE: 'binance',
