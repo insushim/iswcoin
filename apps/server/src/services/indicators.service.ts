@@ -79,11 +79,13 @@ export class IndicatorsService {
       period,
       stdDev,
     });
-    return result.map((bb) => ({
+    // [FIX-6] %B: 각 데이터 포인트에 해당하는 종가 사용 (마지막 종가 고정 버그 수정)
+    const offset = closes.length - result.length;
+    return result.map((bb, i) => ({
       upper: bb.upper,
       middle: bb.middle,
       lower: bb.lower,
-      pb: bb.upper !== bb.lower ? (closes[closes.length - 1]! - bb.lower) / (bb.upper - bb.lower) : 0.5,
+      pb: bb.upper !== bb.lower ? (closes[offset + i]! - bb.lower) / (bb.upper - bb.lower) : 0.5,
     }));
   }
 

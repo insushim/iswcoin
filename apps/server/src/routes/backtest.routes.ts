@@ -78,10 +78,14 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
       walkForwardSplit: params.walkForwardSplit,
     };
 
+    // [FIX-3] 팩토리 함수 → Walk-forward 각 구간마다 독립 전략 인스턴스 생성
     const result = await backtesterService.runBacktest(
       config,
       ohlcvData,
-      (data, cfg) => strategy.analyze(data, cfg)
+      () => {
+        const s = getStrategy(strategyType, params.strategyConfig);
+        return (data, cfg) => s.analyze(data, cfg);
+      }
     );
 
     const saved = await prisma.backtestResult.create({

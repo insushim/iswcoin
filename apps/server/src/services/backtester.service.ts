@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger.js';
-import { indicatorsService, type OHLCVData } from './indicators.service.js';
+import { type OHLCVData } from './indicators.service.js';
 import type { TradeSignal } from '../strategies/base.strategy.js';
 
 export interface BacktestConfig {
@@ -59,6 +59,9 @@ export interface BacktestResult {
 
 type AnalyzeFunction = (data: OHLCVData[], config: Record<string, number>) => TradeSignal | null;
 
+// [FIX-3] 팩토리 함수로 변경 → Walk-forward 시 전략 상태 격리
+type AnalyzeFnFactory = () => AnalyzeFunction;
+
 export interface MonteCarloResult {
   simulations: number;
   confidenceLevel: number;
@@ -74,6 +77,27 @@ export interface MonteCarloResult {
   distribution: { returnPct: number; frequency: number }[];
 }
 
+// [FIX-4] 타임프레임별 연간 캔들 수 (크립토 = 365일 24시간)
+function getPeriodsPerYear(timeframe: string): number {
+  const tf = timeframe.toLowerCase();
+  if (tf === '1m') return 525_600;
+  if (tf === '3m') return 175_200;
+  if (tf === '5m') return 105_120;
+  if (tf === '15m') return 35_040;
+  if (tf === '30m') return 17_520;
+  if (tf === '1h') return 8_760;
+  if (tf === '2h') return 4_380;
+  if (tf === '4h') return 2_190;
+  if (tf === '6h') return 1_460;
+  if (tf === '8h') return 1_095;
+  if (tf === '12h') return 730;
+  if (tf === '1d') return 365;
+  if (tf === '3d') return 122;
+  if (tf === '1w') return 52;
+  if (tf.endsWith('m')) return 12;
+  return 365;
+}
+
 export class BacktesterService {
   private readonly DEFAULT_SLIPPAGE = 0.0005;
   private readonly DEFAULT_FEE = 0.001;
@@ -81,7 +105,7 @@ export class BacktesterService {
   async runBacktest(
     config: BacktestConfig,
     ohlcvData: OHLCVData[],
-    analyzeFn: AnalyzeFunction
+    createAnalyzeFn: AnalyzeFnFactory
   ): Promise<BacktestResult> {
     logger.info('Starting backtest', {
       symbol: config.symbol,
@@ -91,19 +115,21 @@ export class BacktesterService {
 
     const slippage = config.slippagePct || this.DEFAULT_SLIPPAGE;
     const fee = config.feePct || this.DEFAULT_FEE;
+    const periodsPerYear = getPeriodsPerYear(config.timeframe);
 
     const splitIndex = Math.floor(ohlcvData.length * (config.walkForwardSplit || 0.7));
     const inSampleData = ohlcvData.slice(0, splitIndex);
     const outOfSampleData = ohlcvData.slice(splitIndex);
 
-    const fullResult = this.executeBacktest(ohlcvData, config, analyzeFn, slippage, fee);
+    // [FIX-3] 각 실행마다 새로운 전략 인스턴스 생성 → 상태 격리
+    const fullResult = this.executeBacktest(ohlcvData, config, createAnalyzeFn(), slippage, fee, periodsPerYear);
 
     let inSampleMetrics: BacktestMetrics | null = null;
     let outOfSampleMetrics: BacktestMetrics | null = null;
 
     if (inSampleData.length > 50 && outOfSampleData.length > 20) {
-      const inSampleResult = this.executeBacktest(inSampleData, config, analyzeFn, slippage, fee);
-      const outOfSampleResult = this.executeBacktest(outOfSampleData, config, analyzeFn, slippage, fee);
+      const inSampleResult = this.executeBacktest(inSampleData, config, createAnalyzeFn(), slippage, fee, periodsPerYear);
+      const outOfSampleResult = this.executeBacktest(outOfSampleData, config, createAnalyzeFn(), slippage, fee, periodsPerYear);
       inSampleMetrics = inSampleResult.metrics;
       outOfSampleMetrics = outOfSampleResult.metrics;
     }
@@ -131,7 +157,8 @@ export class BacktesterService {
     config: BacktestConfig,
     analyzeFn: AnalyzeFunction,
     slippage: number,
-    fee: number
+    fee: number,
+    periodsPerYear: number
   ): {
     metrics: BacktestMetrics;
     trades: BacktestTrade[];
@@ -147,52 +174,61 @@ export class BacktesterService {
 
     const lookback = 100;
 
+    // [FIX-1] 미래 데이터 참조 방지: 신호는 현재 캔들 종가로 생성,
+    // 체결은 다음 캔들 시가로 실행 (실제 트레이딩과 동일)
+    let pendingSignal: TradeSignal | null = null;
+
     for (let i = lookback; i < data.length; i++) {
-      const windowData = data.slice(Math.max(0, i - lookback), i + 1);
       const currentCandle = data[i]!;
-      const currentPrice = currentCandle.close;
 
-      const signal = analyzeFn(windowData, config.strategyConfig);
+      // 1단계: 이전 캔들에서 생성된 신호를 현재 캔들 시가로 체결
+      if (pendingSignal) {
+        const openPrice = currentCandle.open;
 
-      if (signal && signal.action === 'buy' && !position) {
-        const fillPrice = currentPrice * (1 + slippage);
-        const tradeFee = capital * fee;
-        const availableCapital = capital - tradeFee;
-        const amount = availableCapital / fillPrice;
+        if (pendingSignal.action === 'buy' && !position) {
+          const fillPrice = openPrice * (1 + slippage);
+          const tradeFee = capital * fee;
+          const availableCapital = capital - tradeFee;
+          const amount = availableCapital / fillPrice;
 
-        position = {
-          side: 'buy',
-          entryPrice: fillPrice,
-          amount,
-          entryTime: currentCandle.timestamp,
-        };
+          position = {
+            side: 'buy',
+            entryPrice: fillPrice,
+            amount,
+            entryTime: currentCandle.timestamp,
+          };
 
-        capital = 0;
-      } else if (signal && signal.action === 'sell' && position) {
-        const fillPrice = currentPrice * (1 - slippage);
-        const proceeds = position.amount * fillPrice;
-        const tradeFee = proceeds * fee;
-        const pnl = proceeds - tradeFee - position.amount * position.entryPrice;
-        const pnlPercent = (pnl / (position.amount * position.entryPrice)) * 100;
+          capital = 0;
+        } else if (pendingSignal.action === 'sell' && position) {
+          const fillPrice = openPrice * (1 - slippage);
+          const proceeds = position.amount * fillPrice;
+          const tradeFee = proceeds * fee;
+          const pnl = proceeds - tradeFee - position.amount * position.entryPrice;
+          const pnlPercent = (pnl / (position.amount * position.entryPrice)) * 100;
 
-        trades.push({
-          entryTime: position.entryTime,
-          exitTime: currentCandle.timestamp,
-          side: 'buy',
-          entryPrice: position.entryPrice,
-          exitPrice: fillPrice,
-          amount: position.amount,
-          pnl,
-          pnlPercent,
-          fee: tradeFee + position.amount * position.entryPrice * fee,
-        });
+          trades.push({
+            entryTime: position.entryTime,
+            exitTime: currentCandle.timestamp,
+            side: 'buy',
+            entryPrice: position.entryPrice,
+            exitPrice: fillPrice,
+            amount: position.amount,
+            pnl,
+            pnlPercent,
+            fee: tradeFee + position.amount * position.entryPrice * fee,
+          });
 
-        capital = proceeds - tradeFee;
-        position = null;
+          capital = proceeds - tradeFee;
+          position = null;
+        }
+
+        pendingSignal = null;
       }
 
+      // 2단계: 현재 캔들 종가 기준으로 equity 추적
+      // [FIX-5] 미실현 수익에 매도 수수료 반영
       const currentEquity = position
-        ? position.amount * currentPrice
+        ? position.amount * currentCandle.close * (1 - fee)
         : capital;
 
       if (currentEquity > peakEquity) {
@@ -203,15 +239,39 @@ export class BacktesterService {
 
       equityCurve.push({ timestamp: currentCandle.timestamp, equity: currentEquity });
       drawdownCurve.push({ timestamp: currentCandle.timestamp, drawdown });
+
+      // 3단계: 현재 캔들 종가까지의 데이터로 신호 생성 (다음 캔들에서 체결)
+      const windowData = data.slice(Math.max(0, i - lookback), i + 1);
+      pendingSignal = analyzeFn(windowData, config.strategyConfig);
     }
 
+    // [FIX-2] 강제청산 거래도 trades 배열에 기록
     if (position && data.length > 0) {
-      const lastPrice = data[data.length - 1]!.close;
-      capital = position.amount * lastPrice * (1 - fee);
+      const lastCandle = data[data.length - 1]!;
+      const fillPrice = lastCandle.close * (1 - slippage);
+      const proceeds = position.amount * fillPrice;
+      const tradeFee = proceeds * fee;
+      const pnl = proceeds - tradeFee - position.amount * position.entryPrice;
+      const pnlPercent = (pnl / (position.amount * position.entryPrice)) * 100;
+
+      trades.push({
+        entryTime: position.entryTime,
+        exitTime: lastCandle.timestamp,
+        side: 'buy',
+        entryPrice: position.entryPrice,
+        exitPrice: fillPrice,
+        amount: position.amount,
+        pnl,
+        pnlPercent,
+        fee: tradeFee + position.amount * position.entryPrice * fee,
+      });
+
+      capital = proceeds - tradeFee;
       position = null;
     }
 
-    const metrics = this.calculateMetrics(trades, config.initialCapital, capital, equityCurve);
+    // [FIX-4] 타임프레임 인식 연환산
+    const metrics = this.calculateMetrics(trades, config.initialCapital, capital, equityCurve, periodsPerYear);
 
     return { metrics, trades, equityCurve, drawdownCurve };
   }
@@ -220,7 +280,8 @@ export class BacktesterService {
     trades: BacktestTrade[],
     initialCapital: number,
     finalCapital: number,
-    equityCurve: { timestamp: number; equity: number }[]
+    equityCurve: { timestamp: number; equity: number }[],
+    periodsPerYear: number
   ): BacktestMetrics {
     const totalReturn = finalCapital - initialCapital;
     const totalReturnPct = (totalReturn / initialCapital) * 100;
@@ -255,13 +316,15 @@ export class BacktesterService {
       ? Math.sqrt(returns.reduce((sum, r) => sum + (r - avgReturn) ** 2, 0) / (returns.length - 1))
       : 0;
 
-    const sharpeRatio = stdReturn > 0 ? (avgReturn / stdReturn) * Math.sqrt(252) : 0;
+    // [FIX-4] 타임프레임 인식 Sharpe/Sortino 연환산
+    const annualizationFactor = Math.sqrt(periodsPerYear);
+    const sharpeRatio = stdReturn > 0 ? (avgReturn / stdReturn) * annualizationFactor : 0;
 
     const negativeReturns = returns.filter((r) => r < 0);
     const downstdReturn = negativeReturns.length > 1
       ? Math.sqrt(negativeReturns.reduce((sum, r) => sum + r ** 2, 0) / negativeReturns.length)
       : 0;
-    const sortinoRatio = downstdReturn > 0 ? (avgReturn / downstdReturn) * Math.sqrt(252) : 0;
+    const sortinoRatio = downstdReturn > 0 ? (avgReturn / downstdReturn) * annualizationFactor : 0;
 
     let maxDrawdown = 0;
     let maxDrawdownPct = 0;
@@ -310,6 +373,7 @@ export class BacktesterService {
       calmarRatio,
     };
   }
+
   /**
    * Monte Carlo 시뮬레이션
    * 거래 결과를 무작위 리샘플링하여 전략 안정성 평가
@@ -348,7 +412,6 @@ export class BacktesterService {
     const simSharpes: number[] = [];
 
     for (let sim = 0; sim < simulations; sim++) {
-      // 거래를 무작위로 리샘플링 (복원 추출)
       const sampledTrades = this.resampleTrades(trades);
 
       let capital = initialCapital;
@@ -372,17 +435,15 @@ export class BacktesterService {
       simReturns.push(totalReturn);
       simDrawdowns.push(maxDrawdown * 100);
 
-      // Sharpe
       const avgReturn = returns.length > 0
         ? returns.reduce((a, b) => a + b, 0) / returns.length
         : 0;
       const stdReturn = returns.length > 1
         ? Math.sqrt(returns.reduce((sum, r) => sum + (r - avgReturn) ** 2, 0) / (returns.length - 1))
         : 0;
-      simSharpes.push(stdReturn > 0 ? (avgReturn / stdReturn) * Math.sqrt(252) : 0);
+      simSharpes.push(stdReturn > 0 ? (avgReturn / stdReturn) * Math.sqrt(trades.length) : 0);
     }
 
-    // 정렬
     simReturns.sort((a, b) => a - b);
     simDrawdowns.sort((a, b) => a - b);
     simSharpes.sort((a, b) => a - b);
@@ -390,7 +451,6 @@ export class BacktesterService {
     const lowerIdx = Math.floor((1 - confidenceLevel) * simulations);
     const medianIdx = Math.floor(simulations / 2);
 
-    // 분포 히스토그램 (20 bins)
     const minReturn = simReturns[0]!;
     const maxReturn = simReturns[simReturns.length - 1]!;
     const binSize = (maxReturn - minReturn) / 20 || 1;
