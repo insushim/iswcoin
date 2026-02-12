@@ -29,7 +29,7 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response): Promise
       },
     });
 
-    const botIds = bots.map((b: any) => b.id);
+    const botIds = bots.map((b) => b.id);
 
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -37,29 +37,35 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response): Promise
     startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    const [dailyTrades, weeklyTrades, monthlyTrades, allTrades] = await Promise.all([
-      prisma.trade.findMany({
+    // DB 집계로 최적화 (전체 trades를 메모리에 로드하지 않음)
+    const [dailyAgg, weeklyAgg, monthlyAgg, totalAgg] = await Promise.all([
+      prisma.trade.aggregate({
         where: { botId: { in: botIds }, timestamp: { gte: startOfDay } },
+        _sum: { pnl: true, fee: true },
+        _count: true,
       }),
-      prisma.trade.findMany({
+      prisma.trade.aggregate({
         where: { botId: { in: botIds }, timestamp: { gte: startOfWeek } },
+        _sum: { pnl: true },
       }),
-      prisma.trade.findMany({
+      prisma.trade.aggregate({
         where: { botId: { in: botIds }, timestamp: { gte: startOfMonth } },
+        _sum: { pnl: true },
       }),
-      prisma.trade.findMany({
+      prisma.trade.aggregate({
         where: { botId: { in: botIds } },
+        _sum: { pnl: true, fee: true },
+        _count: true,
       }),
     ]);
 
-    const dailyPnL = dailyTrades.reduce((sum: number, t: any) => sum + (t.pnl ?? 0), 0);
-    const weeklyPnL = weeklyTrades.reduce((sum: number, t: any) => sum + (t.pnl ?? 0), 0);
-    const monthlyPnL = monthlyTrades.reduce((sum: number, t: any) => sum + (t.pnl ?? 0), 0);
-    const totalPnL = allTrades.reduce((sum: number, t: any) => sum + (t.pnl ?? 0), 0);
+    const dailyPnL = dailyAgg._sum.pnl ?? 0;
+    const weeklyPnL = weeklyAgg._sum.pnl ?? 0;
+    const monthlyPnL = monthlyAgg._sum.pnl ?? 0;
+    const totalPnL = totalAgg._sum.pnl ?? 0;
+    const totalFees = totalAgg._sum.fee ?? 0;
 
-    const totalFees = allTrades.reduce((sum: number, t: any) => sum + t.fee, 0);
-
-    const activeBots = bots.filter((b: any) => b.status === 'RUNNING').length;
+    const activeBots = bots.filter((b) => b.status === 'RUNNING').length;
 
     res.json({
       portfolio: portfolio ?? { totalValue: 0, dailyPnL: 0, positions: [] },
@@ -70,7 +76,7 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response): Promise
         total: Math.round(totalPnL * 100) / 100,
       },
       totalFees: Math.round(totalFees * 100) / 100,
-      totalTrades: allTrades.length,
+      totalTrades: totalAgg._count,
       activeBots,
       totalBots: bots.length,
       bots,
@@ -84,7 +90,7 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response): Promise
 router.get('/history', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.userId;
-    const days = parseInt(String(req.query['days'] ?? '30'), 10);
+    const days = Math.min(Math.max(parseInt(String(req.query['days'] ?? '30'), 10) || 30, 1), 365);
 
     const since = new Date();
     since.setDate(since.getDate() - days);
@@ -93,13 +99,14 @@ router.get('/history', async (req: AuthenticatedRequest, res: Response): Promise
       where: { userId },
       select: { id: true },
     });
-    const botIds = bots.map((b: any) => b.id);
+    const botIds = bots.map((b) => b.id);
 
     const trades = await prisma.trade.findMany({
       where: {
         botId: { in: botIds },
         timestamp: { gte: since },
       },
+      select: { timestamp: true, pnl: true, price: true, amount: true },
       orderBy: { timestamp: 'asc' },
     });
 

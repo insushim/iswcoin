@@ -231,6 +231,20 @@ export class ExchangeService {
   private paperExchanges: Map<string, PaperExchange> = new Map();
   private circuitBreakers: Map<string, CircuitBreaker> = new Map();
   private cache: Map<string, { data: unknown; expiry: number }> = new Map();
+  private cacheCleanupTimer: ReturnType<typeof setInterval>;
+
+  constructor() {
+    // 60초마다 만료된 캐시 정리 (메모리 누수 방지)
+    this.cacheCleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of this.cache) {
+        if (now >= entry.expiry) {
+          this.cache.delete(key);
+        }
+      }
+    }, 60_000);
+    this.cacheCleanupTimer.unref();
+  }
 
   private getCircuitBreaker(name: string): CircuitBreaker {
     let cb = this.circuitBreakers.get(name);

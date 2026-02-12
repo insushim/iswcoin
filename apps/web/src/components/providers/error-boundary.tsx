@@ -4,6 +4,7 @@ import { Component, type ReactNode } from "react";
 
 interface ErrorBoundaryProps {
   children: ReactNode;
+  fallback?: ReactNode;
 }
 
 interface ErrorBoundaryState {
@@ -21,8 +22,17 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return { hasError: true, error };
   }
 
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // 프로덕션에서 에러 로깅 (Sentry 등)
+    if (process.env.NODE_ENV === "production") {
+      console.error("ErrorBoundary caught:", error, errorInfo);
+    }
+  }
+
   render() {
     if (this.state.hasError) {
+      if (this.props.fallback) return this.props.fallback;
+
       return (
         <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
           <div className="w-full max-w-md text-center">
@@ -33,6 +43,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <p className="text-sm text-slate-400 mb-6">
               예기치 않은 오류가 발생했습니다. 페이지를 새로고침해주세요.
             </p>
+            {process.env.NODE_ENV !== "production" && this.state.error && (
+              <pre className="mb-4 max-h-32 overflow-auto rounded bg-slate-900 p-3 text-left text-xs text-red-400">
+                {this.state.error.message}
+              </pre>
+            )}
             <button
               onClick={() => {
                 this.setState({ hasError: false, error: null });

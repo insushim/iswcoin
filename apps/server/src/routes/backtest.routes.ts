@@ -10,13 +10,22 @@ import { logger } from '../utils/logger.js';
 
 const router = Router();
 
+// ccxt 인스턴스 싱글턴 (매 요청마다 생성 방지)
+let backtestExchange: import('ccxt').Exchange | null = null;
+function getBacktestExchange(): import('ccxt').Exchange {
+  if (!backtestExchange) {
+    backtestExchange = new ccxt.binance({ enableRateLimit: true });
+  }
+  return backtestExchange;
+}
+
 const runBacktestSchema = z.object({
   symbol: z.string().min(1),
   timeframe: z.string().default('1h'),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   initialCapital: z.number().min(100).default(10000),
-  strategy: z.enum(['DCA', 'GRID', 'MOMENTUM', 'MEAN_REVERSION', 'TRAILING', 'MARTINGALE', 'RL_AGENT']),
+  strategy: z.enum(['DCA', 'GRID', 'MOMENTUM', 'MEAN_REVERSION', 'TRAILING', 'MARTINGALE', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB']),
   strategyConfig: z.record(z.number()).optional(),
   slippagePct: z.number().min(0).max(0.1).default(0.0005),
   feePct: z.number().min(0).max(0.1).default(0.001),
@@ -40,7 +49,7 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
 
     logger.info('Starting backtest', { userId, symbol: params.symbol, strategy: params.strategy });
 
-    const exchange = new ccxt.binance({ enableRateLimit: true });
+    const exchange = getBacktestExchange();
     const since = params.startDate ? new Date(params.startDate).getTime() : undefined;
     const rawOhlcv = await exchange.fetchOHLCV(params.symbol, params.timeframe, since, 1000);
 
@@ -79,8 +88,8 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
       data: {
         userId,
         botId: params.botId ?? null,
-        config: config as any,
-        result: {
+        config: JSON.parse(JSON.stringify(config)),
+        result: JSON.parse(JSON.stringify({
           metrics: result.metrics,
           tradeCount: result.trades.length,
           trades: result.trades.slice(0, 100),
@@ -89,7 +98,7 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
           drawdownCurveSampled: sampleArray(result.drawdownCurve, 200),
           inSampleMetrics: result.inSampleMetrics,
           outOfSampleMetrics: result.outOfSampleMetrics,
-        } as any,
+        })),
       },
     });
 
@@ -103,16 +112,16 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
       outOfSampleMetrics: result.outOfSampleMetrics,
     });
   } catch (err) {
-    logger.error('Backtest failed', { error: String(err) });
-    res.status(500).json({ error: 'Backtest failed', message: String(err) });
+    logger.error('Backtest failed', { error: String(err), stack: (err as Error).stack });
+    res.status(500).json({ error: 'Backtest failed' });
   }
 });
 
 router.get('/results', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.userId;
-    const page = parseInt(String(req.query['page'] ?? '1'), 10);
-    const limit = parseInt(String(req.query['limit'] ?? '20'), 10);
+    const page = Math.max(parseInt(String(req.query['page'] ?? '1'), 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(String(req.query['limit'] ?? '20'), 10) || 20, 1), 100);
 
     const [results, total] = await Promise.all([
       prisma.backtestResult.findMany({
@@ -120,6 +129,12 @@ router.get('/results', async (req: AuthenticatedRequest, res: Response): Promise
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
+        select: {
+          id: true,
+          botId: true,
+          config: true,
+          createdAt: true,
+        },
       }),
       prisma.backtestResult.count({ where: { userId } }),
     ]);

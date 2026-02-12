@@ -43,6 +43,7 @@ router.get('/ticker/:symbol', async (req: AuthenticatedRequest, res: Response): 
     const exchange = getPublicExchange();
     const ticker = await exchangeService.getTicker(exchange, symbol);
 
+    res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=10');
     res.json({
       symbol: ticker.symbol,
       last: ticker.last,
@@ -85,6 +86,7 @@ router.get('/ohlcv/:symbol', async (req: AuthenticatedRequest, res: Response): P
       volume: candle[5],
     }));
 
+    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
     res.json({
       symbol,
       timeframe,
@@ -117,6 +119,7 @@ router.get('/indicators/:symbol', async (req: AuthenticatedRequest, res: Respons
 
     const indicators = indicatorsService.getAllIndicators(ohlcvData);
 
+    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
     res.json({
       symbol,
       timeframe,

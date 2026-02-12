@@ -5,6 +5,7 @@ import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js
 import { logger } from '../utils/logger.js';
 import { getStrategy, type StrategyType } from '../strategies/index.js';
 import { exchangeService } from '../services/exchange.service.js';
+import { indicatorsService } from '../services/indicators.service.js';
 import { decrypt } from '../utils/encryption.js';
 
 const router = Router();
@@ -15,7 +16,7 @@ const createBotSchema = z.object({
   name: z.string().min(1).max(100),
   symbol: z.string().min(1),
   exchange: z.enum(['BINANCE', 'UPBIT', 'BYBIT', 'BITHUMB']),
-  strategy: z.enum(['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT']),
+  strategy: z.enum(['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB']),
   mode: z.enum(['PAPER', 'REAL']).default('PAPER'),
   config: z.record(z.number()).optional(),
   riskConfig: z.record(z.number()).optional(),
@@ -311,7 +312,7 @@ router.post('/:id/stop', async (req: AuthenticatedRequest, res: Response): Promi
   }
 });
 
-function startBotLoop(
+async function startBotLoop(
   botId: string,
   strategyType: StrategyType,
   symbol: string,
@@ -319,7 +320,7 @@ function startBotLoop(
   mode: string,
   config: Record<string, number>,
   userId: string
-): void {
+): Promise<void> {
   const strategy = getStrategy(strategyType, config);
   const exchangeName = exchangeService.getExchangeNameFromEnum(exchangeEnum);
 
@@ -327,24 +328,28 @@ function startBotLoop(
     exchangeService.initPaperExchange(exchangeName, 10000);
   }
 
+  // API 키를 시작 시 한 번만 조회하여 캐싱 (매 루프 DB 쿼리 방지)
+  let cachedExchange: ReturnType<typeof exchangeService.initExchange> | null = null;
+
+  if (mode === 'REAL') {
+    const apiKeyRecord = await prisma.apiKey.findFirst({
+      where: { userId, exchange: exchangeEnum as 'BINANCE' | 'UPBIT' | 'BYBIT' | 'BITHUMB', isActive: true },
+    });
+    if (apiKeyRecord) {
+      cachedExchange = exchangeService.initExchange(
+        exchangeName,
+        decrypt(apiKeyRecord.apiKey),
+        decrypt(apiKeyRecord.apiSecret)
+      );
+    }
+  }
+
   const interval = setInterval(async () => {
     try {
-      let exchange;
-      if (mode === 'REAL') {
-        const apiKeyRecord = await prisma.apiKey.findFirst({
-          where: { userId, exchange: exchangeEnum as 'BINANCE' | 'UPBIT' | 'BYBIT' | 'BITHUMB', isActive: true },
-        });
-
-        if (!apiKeyRecord) {
-          logger.warn('No API key found for running bot', { botId });
-          return;
-        }
-
-        exchange = exchangeService.initExchange(
-          exchangeName,
-          decrypt(apiKeyRecord.apiKey),
-          decrypt(apiKeyRecord.apiSecret)
-        );
+      const exchange = cachedExchange;
+      if (mode === 'REAL' && !exchange) {
+        logger.warn('No API key found for running bot', { botId });
+        return;
       }
 
       let ohlcvRaw: number[][] = [];
@@ -357,8 +362,7 @@ function startBotLoop(
         return;
       }
 
-      const { indicatorsService: indSvc } = await import('../services/indicators.service.js');
-      const ohlcvData = indSvc.parseOHLCV(ohlcvRaw);
+      const ohlcvData = indicatorsService.parseOHLCV(ohlcvRaw);
 
       const signal = strategy.analyze(ohlcvData, config);
 
@@ -412,7 +416,7 @@ function startBotLoop(
             botId,
             level: 'INFO',
             message: `Signal: ${signal.action} - ${signal.reason}`,
-            data: (signal.metadata as any) ?? {},
+            data: (signal.metadata ?? {}) as import('@prisma/client').Prisma.InputJsonValue,
           },
         });
       }

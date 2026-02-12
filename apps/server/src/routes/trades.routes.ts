@@ -34,7 +34,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response): Promise<void> 
       where: { userId },
       select: { id: true },
     });
-    const userBotIds = userBots.map((b: any) => b.id);
+    const userBotIds = userBots.map((b) => b.id);
 
     if (userBotIds.length === 0) {
       res.json({ trades: [], total: 0, page, limit });
@@ -98,7 +98,7 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response): Promise
       where: { userId },
       select: { id: true },
     });
-    const userBotIds = userBots.map((b: any) => b.id);
+    const userBotIds = userBots.map((b) => b.id);
 
     if (userBotIds.length === 0) {
       res.json({
@@ -112,26 +112,39 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    const trades = await prisma.trade.findMany({
-      where: { botId: { in: userBotIds } },
-    });
+    // DB 집계로 최적화 (전체 trades를 메모리에 로드하지 않음)
+    const [totalAgg, pnlAgg, winCount, bestTrade, worstTrade] = await Promise.all([
+      prisma.trade.aggregate({
+        where: { botId: { in: userBotIds } },
+        _count: true,
+      }),
+      prisma.trade.aggregate({
+        where: { botId: { in: userBotIds }, pnl: { not: null } },
+        _sum: { pnl: true },
+        _avg: { pnl: true },
+        _count: true,
+      }),
+      prisma.trade.count({
+        where: { botId: { in: userBotIds }, pnl: { gt: 0 } },
+      }),
+      prisma.trade.findFirst({
+        where: { botId: { in: userBotIds }, pnl: { not: null } },
+        orderBy: { pnl: 'desc' },
+      }),
+      prisma.trade.findFirst({
+        where: { botId: { in: userBotIds }, pnl: { not: null } },
+        orderBy: { pnl: 'asc' },
+      }),
+    ]);
 
-    const tradesWithPnL = trades.filter((t: any) => t.pnl !== null);
-    const totalPnL = tradesWithPnL.reduce((sum: number, t: any) => sum + (t.pnl ?? 0), 0);
-    const winningTrades = tradesWithPnL.filter((t: any) => (t.pnl ?? 0) > 0);
-    const winRate = tradesWithPnL.length > 0
-      ? (winningTrades.length / tradesWithPnL.length) * 100
+    const totalPnL = pnlAgg._sum.pnl ?? 0;
+    const avgPnL = pnlAgg._avg.pnl ?? 0;
+    const winRate = pnlAgg._count > 0
+      ? (winCount / pnlAgg._count) * 100
       : 0;
-    const avgPnL = tradesWithPnL.length > 0
-      ? totalPnL / tradesWithPnL.length
-      : 0;
-
-    const sortedByPnL = [...tradesWithPnL].sort((a: any, b: any) => (b.pnl ?? 0) - (a.pnl ?? 0));
-    const bestTrade = sortedByPnL.length > 0 ? sortedByPnL[0] : null;
-    const worstTrade = sortedByPnL.length > 0 ? sortedByPnL[sortedByPnL.length - 1] : null;
 
     res.json({
-      totalTrades: trades.length,
+      totalTrades: totalAgg._count,
       totalPnL: Math.round(totalPnL * 100) / 100,
       winRate: Math.round(winRate * 100) / 100,
       avgPnL: Math.round(avgPnL * 100) / 100,

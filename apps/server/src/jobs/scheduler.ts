@@ -27,10 +27,11 @@ export function startScheduler(): void {
 
       if (runningBots.length === 0) return;
 
-      const symbols = [...new Set(runningBots.map((b: any) => b.symbol))];
+      const symbols = [...new Set(runningBots.map((b) => b.symbol))];
       const exchange = getPublicExchange();
 
-      for (const symbol of symbols) {
+      // 병렬 ticker 업데이트 (순차 → 병렬로 성능 개선)
+      await Promise.allSettled(symbols.map(async (symbol) => {
         try {
           const ticker = await exchange.fetchTicker(symbol);
 
@@ -42,7 +43,7 @@ export function startScheduler(): void {
             timestamp: Date.now(),
           });
 
-          const botsForSymbol = runningBots.filter((b: any) => b.symbol === symbol);
+          const botsForSymbol = runningBots.filter((b) => b.symbol === symbol);
           for (const bot of botsForSymbol) {
             emitBotStatus(bot.id, {
               botId: bot.id,
@@ -54,7 +55,7 @@ export function startScheduler(): void {
         } catch (err) {
           logger.debug('Failed to update ticker', { symbol, error: String(err) });
         }
-      }
+      }));
     } catch (err) {
       logger.error('Ticker update job failed', { error: String(err) });
     }

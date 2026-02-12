@@ -22,7 +22,19 @@ const app = express();
 const httpServer = createServer(app);
 
 // 보안 헤더
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'", env.CORS_ORIGIN],
+    },
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));
 
 // GZIP 압축
 app.use(compression());
@@ -35,9 +47,20 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-// 레이트 리미팅
+// 레이트 리미팅 (메모리 누수 방지: 주기적 정리)
 const rateLimit = (windowMs: number, max: number) => {
   const requests = new Map<string, { count: number; resetTime: number }>();
+
+  // 만료된 엔트리 주기적 정리 (5분마다)
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of requests) {
+      if (now > record.resetTime) {
+        requests.delete(key);
+      }
+    }
+  }, 5 * 60 * 1000);
+  cleanupInterval.unref();
 
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -50,6 +73,7 @@ const rateLimit = (windowMs: number, max: number) => {
     }
 
     if (record.count >= max) {
+      res.set('Retry-After', String(Math.ceil((record.resetTime - now) / 1000)));
       res.status(429).json({ error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' });
       return;
     }
@@ -59,10 +83,14 @@ const rateLimit = (windowMs: number, max: number) => {
   };
 };
 
+// Auth 엔드포인트에 더 엄격한 레이트 리미팅
+const authRateLimit = rateLimit(15 * 60 * 1000, 20); // 15분에 20회
+app.use('/api/auth', authRateLimit);
 app.use('/api/', rateLimit(env.RATE_LIMIT_WINDOW_MS, env.RATE_LIMIT_MAX));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+// 요청 본문 크기 제한 (보안)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 app.use((req, _res, next) => {
   const start = Date.now();
@@ -80,11 +108,7 @@ app.use((req, _res, next) => {
 app.get('/health', (_req, res) => {
   res.json({
     status: 'healthy',
-    version: '1.0.0',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: env.NODE_ENV,
-    wsClients: getConnectedClientsCount(),
   });
 });
 
@@ -139,20 +163,27 @@ process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled rejection', { reason: String(reason) });
 });
 
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  httpServer.close(() => {
+async function gracefulShutdown(signal: string) {
+  logger.info(`${signal} received, shutting down gracefully`);
+  httpServer.close(async () => {
+    try {
+      const { prisma } = await import('./db.js');
+      await prisma.$disconnect();
+      logger.info('Database disconnected');
+    } catch {
+      // 이미 종료 중이므로 무시
+    }
     logger.info('Server closed');
     process.exit(0);
   });
-});
+  // 10초 후 강제 종료
+  setTimeout(() => {
+    logger.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000).unref();
+}
 
-process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  httpServer.close(() => {
-    logger.info('Server closed');
-    process.exit(0);
-  });
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 export default app;

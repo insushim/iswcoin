@@ -11,9 +11,9 @@ const envSchema = z.object({
   DATABASE_URL: z.string().default('postgresql://postgres:postgres@localhost:5432/cryptosentinel'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   JWT_SECRET: isProd
-    ? z.string().min(32)
-    : z.string().default('dev-jwt-secret-do-not-use-in-prod'),
-  JWT_EXPIRES_IN: z.string().default('7d'),
+    ? z.string().min(64, 'Production JWT_SECRET must be at least 64 characters')
+    : z.string().default('dev-jwt-secret-do-not-use-in-prod-minimum-32-chars!!'),
+  JWT_EXPIRES_IN: z.string().default('24h'),
   ENCRYPTION_KEY: isProd
     ? z.string().length(32)
     : z.string().min(32).default('01234567890123456789012345678901'),

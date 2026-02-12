@@ -9,7 +9,12 @@ const router = Router();
 
 const registerSchema = z.object({
   email: z.string().email('Invalid email format'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  password: z.string()
+    .min(8, '비밀번호는 최소 8자 이상이어야 합니다')
+    .max(128, '비밀번호는 128자를 초과할 수 없습니다')
+    .regex(/[A-Z]/, '대문자를 1개 이상 포함해야 합니다')
+    .regex(/[a-z]/, '소문자를 1개 이상 포함해야 합니다')
+    .regex(/[0-9]/, '숫자를 1개 이상 포함해야 합니다'),
   name: z.string().min(1, 'Name is required').max(100),
 });
 
