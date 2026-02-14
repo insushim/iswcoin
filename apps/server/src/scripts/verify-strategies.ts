@@ -876,49 +876,43 @@ function testStatArb() {
 
   const strategy = new StatArbStrategy();
 
-  // StatArb 매수: Z-Score < -2.0 cross 필요.
-  // 핵심: Z-Score는 (currentSpread - spreadMean) / spreadStd
-  // spread = price - SMA(20)
-  // 사인파로 평균회귀 형성 후, 마지막에 급락으로 spread가 극단적으로 음수가 되어야 함.
-  // 이전 시도에서 Z-Score=-1.58이었으므로 하락폭을 더 키움.
+  // StatArb 매수: score >= 55 필요
+  // Z-Score cross below -2.0 (+35) + hurst < 0.5 (+15) + volume (+10) = 60
+  // 핵심 1: cross = prevZ >= -2.0 && Z < -2.0 -> 마지막 봉에서 급락
+  // 핵심 2: hurst < 0.5 -> 최근 60 가격이 평균회귀 패턴
+  // 핵심 3: |Z| < 3.5 -> 극단값 회피
 
   const data: OHLCVData[] = [];
   const base = 50000;
   const len = 200;
 
-  // Phase 1 (0-159): 강한 사인파 (Hurst < 0.5)
-  for (let i = 0; i < 160; i++) {
-    const price = base * (1 + Math.sin(i * 0.1) * 0.025);
+  // Phase 1 (0-195): 사인파 (lookbackPeriod=60이므로 최근 60봉이 대부분 사인파이어야 hurst < 0.5)
+  // 강한 사인파를 전체적으로 유지하여 hurst가 확실히 < 0.5이 되도록 함
+  for (let i = 0; i < 196; i++) {
+    const price = base * (1 + Math.sin(i * 0.15) * 0.03);
     data.push({
       timestamp: Date.now() - (len - i) * 3600000,
       open: price * 1.001, high: price * 1.004, low: price * 0.996,
       close: price, volume: 600,
     });
   }
-  // Phase 2 (160-179): 안정 (spread stabilize)
-  for (let i = 160; i < 180; i++) {
-    data.push({
-      timestamp: Date.now() - (len - i) * 3600000,
-      open: base * 0.999, high: base * 1.003, low: base * 0.997,
-      close: base, volume: 600,
-    });
-  }
-  // Phase 3 (180-198): 점진적 하락 -> Z-Score가 -2.0에 접근
-  for (let i = 180; i < 199; i++) {
-    const r = (i - 180) / 19;
-    const price = base * (1 - r * 0.10); // 10% 하락
+  // Phase 2 (196-198): 살짝 하락 (prevZ가 -2.0 이상 유지되도록 미세하게만)
+  for (let i = 196; i < 199; i++) {
+    const r = (i - 196) / 3;
+    const price = base * (1 - r * 0.01); // 1% 하락만
     data.push({
       timestamp: Date.now() - (len - i) * 3600000,
       open: price * 1.001, high: price * 1.003, low: price * 0.997,
       close: price, volume: 600,
     });
   }
-  // Phase 4 (199): 마지막 봉에서 큰 하락으로 Z-Score가 -2.0 아래로 cross
-  const finalDropPrice = base * 0.90 * 0.93; // 추가 7% 하락
+  // Phase 3 (199): 마지막 봉 - 강한 급락으로 Z-Score가 -2.0 ~ -3.0 으로 cross
+  // SMA(20)는 아직 base 근처에 있고, 가격이 급락하면 spread = price - SMA가 크게 음수
+  const finalDropPrice = base * 0.94; // 6% 급락
   data.push({
     timestamp: Date.now() - 1 * 3600000,
-    open: finalDropPrice * 1.003, high: finalDropPrice * 1.004,
-    low: finalDropPrice * 0.996, close: finalDropPrice, volume: 600,
+    open: base * 0.99, high: base * 0.991, low: finalDropPrice * 0.997,
+    close: finalDropPrice, volume: 600,
   });
 
   const buySignal = strategy.analyze(data);
@@ -938,47 +932,40 @@ function testStatArb() {
     buySignal !== null && buySignal.action === 'buy',
     buySignal
       ? `zScore=${buySignal.metadata?.['zScore']}, hurst=${buySignal.metadata?.['hurst']}, score=${buySignal.metadata?.['score']}`
-      : `Z-Score=${bZScore.toFixed(2)} (need < -2.0) - score 합산 부족`,
+      : `Z-Score=${bZScore.toFixed(2)} (need < -2.0 and > -3.5) - score 합산 부족`,
     buySignal
   );
 
   // 10b. Z-Score 매도 (급등)
+  // Z-Score cross above 2.0 (+35) + hurst < 0.5 (+15) + volume (+10) = 60
   const strategy2 = new StatArbStrategy();
   const sellData: OHLCVData[] = [];
 
-  // Phase 1: 사인파
-  for (let i = 0; i < 160; i++) {
-    const price = base * (1 + Math.sin(i * 0.1) * 0.025);
+  // Phase 1 (0-195): 사인파 (hurst < 0.5 보장)
+  for (let i = 0; i < 196; i++) {
+    const price = base * (1 + Math.sin(i * 0.15) * 0.03);
     sellData.push({
       timestamp: Date.now() - (len - i) * 3600000,
       open: price * 0.999, high: price * 1.004, low: price * 0.996,
       close: price, volume: 600,
     });
   }
-  // Phase 2: 안정
-  for (let i = 160; i < 180; i++) {
-    sellData.push({
-      timestamp: Date.now() - (len - i) * 3600000,
-      open: base * 0.999, high: base * 1.003, low: base * 0.997,
-      close: base, volume: 600,
-    });
-  }
-  // Phase 3 (180-198): 점진적 상승 -> Z-Score가 2.0에 접근
-  for (let i = 180; i < 199; i++) {
-    const r = (i - 180) / 19;
-    const price = base * (1 + r * 0.10);
+  // Phase 2 (196-198): 살짝 상승 (prevZ가 2.0 이하 유지되도록 미세하게만)
+  for (let i = 196; i < 199; i++) {
+    const r = (i - 196) / 3;
+    const price = base * (1 + r * 0.01); // 1% 상승만
     sellData.push({
       timestamp: Date.now() - (len - i) * 3600000,
       open: price * 0.999, high: price * 1.004, low: price * 0.997,
       close: price, volume: 600,
     });
   }
-  // Phase 4 (199): 마지막 봉에서 큰 상승으로 Z-Score가 2.0 위로 cross
-  const finalRisePrice = base * 1.10 * 1.07;
+  // Phase 3 (199): 마지막 봉 - 강한 급등으로 Z-Score가 2.0 ~ 3.0 으로 cross
+  const finalRisePrice = base * 1.06; // 6% 급등
   sellData.push({
     timestamp: Date.now() - 1 * 3600000,
-    open: finalRisePrice * 0.997, high: finalRisePrice * 1.005,
-    low: finalRisePrice * 0.996, close: finalRisePrice, volume: 600,
+    open: base * 1.01, high: finalRisePrice * 1.005, low: base * 1.009,
+    close: finalRisePrice, volume: 600,
   });
 
   const sellSignal = strategy2.analyze(sellData);
@@ -997,7 +984,7 @@ function testStatArb() {
     sellSignal !== null && sellSignal.action === 'sell',
     sellSignal
       ? `zScore=${sellSignal.metadata?.['zScore']}, score=${sellSignal.metadata?.['score']}`
-      : `Z-Score=${sZScore.toFixed(2)} (need > 2.0) - score 합산 부족`,
+      : `Z-Score=${sZScore.toFixed(2)} (need > 2.0 and < 3.5) - score 합산 부족`,
     sellSignal
   );
 
@@ -1038,15 +1025,15 @@ function testScalping() {
   const strategy = new ScalpingStrategy();
 
   // EMA(5) vs EMA(13) cross up: prevEmaFast <= prevEmaSlow && currentEmaFast > currentEmaSlow
-  // EMA(5)가 빠르게 반응하므로, 바닥 횡보 후 강한 점프 2봉이면 cross 가능.
-  // 핵심: 전전봉까지 EMA5 <= EMA13, 전봉에서 EMA5 > EMA13 가 되어야 함.
-  //
-  // 방법: 하락 -> 바닥 (EMA5=EMA13 수렴) -> 마지막 2-3봉 강한 점프 -> cross
+  // 핵심: 전봉에서 EMA5 <= EMA13, 마지막 봉에서 EMA5 > EMA13
+  // 방법: 하락 후 매우 느리게 계속 하락 (EMA5 < EMA13 유지) -> 마지막 봉에 강한 점프
+  // EMA(5) k=2/6=0.333, EMA(13) k=2/14=0.143
+  // 계속 하락하면 EMA5가 더 빠르게 내려가므로 EMA5 < EMA13 자연 유지
 
   const data: OHLCVData[] = [];
   const base = 50000;
 
-  // Phase 1 (0-29): 하락 (EMA5 < EMA13)
+  // Phase 1 (0-29): 안정적 하락 (EMA 초기값 형성 + EMA5 < EMA13 설정)
   for (let i = 0; i < 30; i++) {
     const price = base * (1 - (i / 30) * 0.10);
     data.push({
@@ -1055,39 +1042,28 @@ function testScalping() {
       close: price, volume: 200,
     });
   }
-  // Phase 2 (30-53): 바닥 횡보 (EMA 수렴)
-  const bottom = base * 0.90;
-  for (let i = 30; i < 54; i++) {
-    const wobble = Math.sin((i - 30) * 0.5) * bottom * 0.002;
-    const price = bottom + wobble;
+  // Phase 2 (30-58): 계속 미세 하락 유지 (EMA5 < EMA13 유지)
+  // 매 봉 0.05%씩 하락하여 EMA5가 EMA13 아래에 머물도록 함
+  const bottomStart = base * 0.90;
+  for (let i = 30; i < 59; i++) {
+    const r = (i - 30) / 29;
+    const price = bottomStart * (1 - r * 0.02); // 2% 추가 하락
     data.push({
       timestamp: Date.now() - (60 - i) * 3600000,
-      open: price * 0.999, high: price * 1.003, low: price * 0.997,
+      open: price * 1.001, high: price * 1.003, low: price * 0.997,
       close: price, volume: 200,
     });
   }
-  // Phase 3 (54-57): 계속 바닥 (EMA5 == EMA13 수렴 유지)
-  for (let i = 54; i < 58; i++) {
-    const wobble2 = Math.sin((i - 30) * 0.5) * bottom * 0.001;
-    data.push({
-      timestamp: Date.now() - (60 - i) * 3600000,
-      open: (bottom + wobble2) * 0.999, high: (bottom + wobble2) * 1.003,
-      low: (bottom + wobble2) * 0.997, close: bottom + wobble2, volume: 200,
-    });
-  }
-  // Phase 4 (58): 전봉 - EMA5 아직 EMA13 이하 (미세 상승)
-  data.push({
-    timestamp: Date.now() - 2 * 3600000,
-    open: bottom * 1.001, high: bottom * 1.005, low: bottom * 0.999,
-    close: bottom * 1.003, volume: 300,
-  });
-  // Phase 5 (59): 마지막 봉 - 강한 점프 (EMA5 > EMA13 cross + volume spike)
-  // EMA5는 최근 5봉에 민감, EMA13은 느림. 한 봉에 3%+ 점프하면 EMA5가 EMA13 위로 갈 수 있음
-  const jumpPrice = bottom * 1.04; // 4% 점프
+  // Phase 3 (59): 마지막 봉 - 강한 점프로 EMA5 > EMA13 cross
+  // 현재 바닥은 bottomStart * 0.98 = base * 0.882
+  // EMA(5)는 바닥 근처, EMA(13)도 바닥 근처이지만 약간 위
+  // 5% 점프하면 EMA5가 EMA13 위로 cross
+  const currentBottom = bottomStart * 0.98;
+  const jumpPrice = currentBottom * 1.06; // 6% 점프
   data.push({
     timestamp: Date.now() - 1 * 3600000,
-    open: bottom * 1.005, high: jumpPrice * 1.005, low: bottom * 1.003,
-    close: jumpPrice, volume: 4000, // 강한 volume spike
+    open: currentBottom * 1.001, high: jumpPrice * 1.005, low: currentBottom * 0.999,
+    close: jumpPrice, volume: 4000, // volume spike
   });
 
   const buySignal = strategy.analyze(data);
@@ -1113,10 +1089,11 @@ function testScalping() {
 
   // 11b. EMA 크로스 다운 매도
   // EMA(5) cross down: prevEmaFast >= prevEmaSlow && currentEmaFast < currentEmaSlow
+  // 방법: 계속 미세 상승 유지 (EMA5 > EMA13) -> 마지막 봉에 강한 급락
   const strategy2 = new ScalpingStrategy();
   const sellData: OHLCVData[] = [];
 
-  // Phase 1: 상승 (EMA5 > EMA13)
+  // Phase 1 (0-29): 상승 (EMA5 > EMA13 확립)
   for (let i = 0; i < 30; i++) {
     const price = base * (1 + (i / 30) * 0.10);
     sellData.push({
@@ -1125,37 +1102,25 @@ function testScalping() {
       close: price, volume: 300,
     });
   }
-  // Phase 2: 고점 횡보 (EMA 수렴)
-  const top = base * 1.10;
-  for (let i = 30; i < 54; i++) {
-    const wobble = Math.sin((i - 30) * 0.5) * top * 0.002;
+  // Phase 2 (30-58): 계속 미세 상승 유지 (EMA5 > EMA13 유지)
+  // 매 봉 0.05%씩 상승하여 EMA5가 EMA13 위에 머물도록 함
+  const topStart = base * 1.10;
+  for (let i = 30; i < 59; i++) {
+    const r = (i - 30) / 29;
+    const price = topStart * (1 + r * 0.02); // 2% 추가 상승
     sellData.push({
       timestamp: Date.now() - (60 - i) * 3600000,
-      open: (top + wobble) * 1.001, high: (top + wobble) * 1.003, low: (top + wobble) * 0.997,
-      close: top + wobble, volume: 300,
+      open: price * 0.999, high: price * 1.003, low: price * 0.997,
+      close: price, volume: 300,
     });
   }
-  // Phase 3 (54-57): 계속 고점 횡보
-  for (let i = 54; i < 58; i++) {
-    const wobble2 = Math.sin((i - 30) * 0.5) * top * 0.001;
-    sellData.push({
-      timestamp: Date.now() - (60 - i) * 3600000,
-      open: (top + wobble2) * 1.001, high: (top + wobble2) * 1.003,
-      low: (top + wobble2) * 0.997, close: top + wobble2, volume: 300,
-    });
-  }
-  // Phase 4 (58): 전봉 - EMA5 아직 EMA13 이상 (미세 하락)
-  sellData.push({
-    timestamp: Date.now() - 2 * 3600000,
-    open: top * 0.999, high: top * 1.001, low: top * 0.996,
-    close: top * 0.997, volume: 400,
-  });
-  // Phase 5 (59): 마지막 봉 - 강한 급락 (EMA5 < EMA13 cross + volume spike + bearish)
-  const dropScalpPrice = top * 0.96; // 4% 급락
+  // Phase 3 (59): 마지막 봉 - 강한 급락으로 EMA5 < EMA13 cross
+  const currentTop = topStart * 1.02;
+  const dropScalpPrice = currentTop * 0.94; // 6% 급락
   sellData.push({
     timestamp: Date.now() - 1 * 3600000,
-    open: top * 0.996, high: top * 0.997, low: dropScalpPrice * 0.998,
-    close: dropScalpPrice, volume: 4000,
+    open: currentTop * 0.999, high: currentTop * 1.001, low: dropScalpPrice * 0.998,
+    close: dropScalpPrice, volume: 4000, // volume spike
   });
 
   const sellSignal = strategy2.analyze(sellData);
