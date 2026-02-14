@@ -6,9 +6,14 @@ import { Header } from "@/components/layout/header";
 
 const PUBLIC_PATHS = ["/login", "/register"];
 
+function isPublicPath(path: string): boolean {
+  const normalized = path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
+  return PUBLIC_PATHS.includes(normalized);
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isPublic = PUBLIC_PATHS.includes(pathname);
+  const isPublic = isPublicPath(pathname);
 
   if (isPublic) {
     return <>{children}</>;

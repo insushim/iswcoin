@@ -45,6 +45,17 @@ export function EquityCurve({ data, height = 300, showGrid = true }: EquityCurve
   const isPositive = data.length >= 2 && data[data.length - 1].value >= data[0].value;
   const color = isPositive ? "#10b981" : "#ef4444";
 
+  // Y축 domain 자동 계산 - 데이터 범위에 맞게 스케일링
+  const values = data.map((d) => d.value);
+  const minVal = Math.min(...values);
+  const maxVal = Math.max(...values);
+  const range = maxVal - minVal;
+  const padding = range > 0 ? range * 0.15 : maxVal * 0.02;
+  const yDomain: [number, number] = [
+    Math.max(0, Math.floor(minVal - padding)),
+    Math.ceil(maxVal + padding),
+  ];
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -65,6 +76,7 @@ export function EquityCurve({ data, height = 300, showGrid = true }: EquityCurve
           tickFormatter={(val: string) => formatDate(val, "MMM dd")}
         />
         <YAxis
+          domain={yDomain}
           tick={{ fill: "#64748b", fontSize: 11 }}
           tickLine={false}
           axisLine={{ stroke: "rgba(51, 65, 85, 0.5)" }}

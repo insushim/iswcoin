@@ -41,12 +41,15 @@ api.interceptors.response.use(
 
     // 401 Unauthorized
     if (status === 401) {
-      if (typeof window !== "undefined") {
+      const url = error.config?.url || "";
+      const isAuthEndpoint = url.includes("/auth/login") || url.includes("/auth/register");
+      if (!isAuthEndpoint && typeof window !== "undefined") {
         localStorage.removeItem("auth_token");
         localStorage.removeItem("auth_user");
         window.location.href = "/login";
+        return Promise.reject(new Error("인증이 만료되었습니다. 다시 로그인해주세요."));
       }
-      return Promise.reject(new Error("인증이 만료되었습니다. 다시 로그인해주세요."));
+      // 로그인/회원가입 401 → 서버 에러 메시지 그대로 전달
     }
 
     // 403 Forbidden
@@ -59,7 +62,7 @@ api.interceptors.response.use(
       return Promise.reject(new Error("서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요."));
     }
 
-    // 4xx Client errors - use server message
+    // 4xx Client errors - 서버 에러 메시지 사용
     const message =
       error.response.data?.error ||
       error.response.data?.message ||

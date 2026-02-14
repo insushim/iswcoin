@@ -6,6 +6,11 @@ import { useAuthStore } from "@/stores/auth.store";
 
 const PUBLIC_PATHS = ["/login", "/register"];
 
+function isPublicPath(path: string): boolean {
+  const normalized = path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
+  return PUBLIC_PATHS.includes(normalized);
+}
+
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -19,7 +24,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!checked) return;
-    const isPublic = PUBLIC_PATHS.includes(pathname);
+    const isPublic = isPublicPath(pathname);
 
     if (!isAuthenticated && !isPublic) {
       router.replace("/login");
@@ -37,7 +42,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const isPublic = PUBLIC_PATHS.includes(pathname);
+  const isPublic = isPublicPath(pathname);
   if (!isAuthenticated && !isPublic) return null;
   if (isAuthenticated && isPublic) return null;
 
