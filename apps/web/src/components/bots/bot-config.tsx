@@ -95,7 +95,8 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
   const handleFieldChange = (key: string, value: string, type: string) => {
     let parsedValue: number | string | boolean;
     if (type === "number") {
-      parsedValue = parseFloat(value) || 0;
+      const num = parseFloat(value);
+      parsedValue = isNaN(num) ? 0 : Math.max(0, num);
     } else if (type === "boolean") {
       parsedValue = value === "true";
     } else {
@@ -118,6 +119,8 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
             placeholder={field.placeholder}
             helperText={field.helperText}
             value={String(config[field.key] ?? field.defaultValue)}
+            min={field.type === "number" ? "0" : undefined}
+            step={field.type === "number" ? "any" : undefined}
             onChange={(e) =>
               handleFieldChange(field.key, e.target.value, field.type)
             }

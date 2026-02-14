@@ -59,6 +59,23 @@ export default function BacktestPage() {
     setIsRunning(true);
     setError(null);
 
+    const capital = parseFloat(initialCapital);
+    if (isNaN(capital) || capital <= 0) {
+      setError("초기 자본은 0보다 큰 금액을 입력해주세요.");
+      setIsRunning(false);
+      return;
+    }
+    if (capital > 10_000_000) {
+      setError("초기 자본은 $10,000,000 이하로 설정해주세요.");
+      setIsRunning(false);
+      return;
+    }
+    if (startDate >= endDate) {
+      setError("시작일은 종료일보다 이전이어야 합니다.");
+      setIsRunning(false);
+      return;
+    }
+
     try {
       const numericParams: Record<string, number> = {};
       Object.entries(config).forEach(([k, v]) => {
@@ -70,7 +87,7 @@ export default function BacktestPage() {
         strategy,
         startDate,
         endDate,
-        initialCapital: parseFloat(initialCapital),
+        initialCapital: capital,
         params: numericParams,
       });
       if (res.data.error) {

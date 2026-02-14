@@ -33,25 +33,6 @@ interface ApiKeyEntry {
   isActive: boolean;
 }
 
-const DEMO_API_KEYS: ApiKeyEntry[] = [
-  {
-    id: "1",
-    exchange: Exchange.BINANCE,
-    label: "메인 트레이딩",
-    keyPreview: "sk-...x3f2",
-    createdAt: "2025-01-10",
-    isActive: true,
-  },
-  {
-    id: "2",
-    exchange: Exchange.BYBIT,
-    label: "백업",
-    keyPreview: "by-...a9d1",
-    createdAt: "2025-01-15",
-    isActive: false,
-  },
-];
-
 export default function SettingsPage() {
   const { user } = useAuthStore();
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
@@ -161,7 +142,6 @@ export default function SettingsPage() {
       isActive: true,
     };
 
-    // Save to server
     try {
       await api.post(endpoints.settings.apiKeys, {
         exchange: newKeyExchange,
@@ -169,24 +149,25 @@ export default function SettingsPage() {
         apiKey: newApiKey,
         secretKey: newApiSecret,
       });
+      setApiKeys([...apiKeys, newEntry]);
+      setNewKeyLabel("");
+      setNewApiKey("");
+      setNewApiSecret("");
+      setShowAddKey(false);
     } catch {
-      // Continue with local state update
+      showSaveMessage("API 키 저장에 실패했습니다. 다시 시도해주세요.");
     }
-
-    setApiKeys([...apiKeys, newEntry]);
-    setNewKeyLabel("");
-    setNewApiKey("");
-    setNewApiSecret("");
-    setShowAddKey(false);
   };
 
   const handleRemoveKey = async (id: string) => {
+    const confirmed = window.confirm("이 API 키를 삭제하시겠습니까?");
+    if (!confirmed) return;
     try {
       await api.delete(`${endpoints.settings.apiKeys}/${id}`);
+      setApiKeys(apiKeys.filter((k) => k.id !== id));
     } catch {
-      // Continue with local state update
+      showSaveMessage("API 키 삭제에 실패했습니다. 다시 시도해주세요.");
     }
-    setApiKeys(apiKeys.filter((k) => k.id !== id));
   };
 
   const exchangeOptions = Object.values(Exchange).map((e) => ({

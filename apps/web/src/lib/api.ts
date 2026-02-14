@@ -28,19 +28,42 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError<{ error?: string; message?: string }>) => {
-    if (error.response?.status === 401) {
+    // 네트워크 에러 (서버 응답 없음)
+    if (!error.response) {
+      const isTimeout = error.code === "ECONNABORTED";
+      const message = isTimeout
+        ? "서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+        : "네트워크 연결을 확인해주세요. 서버에 연결할 수 없습니다.";
+      return Promise.reject(new Error(message));
+    }
+
+    const status = error.response.status;
+
+    // 401 Unauthorized
+    if (status === 401) {
       if (typeof window !== "undefined") {
         localStorage.removeItem("auth_token");
         localStorage.removeItem("auth_user");
         window.location.href = "/login";
       }
+      return Promise.reject(new Error("인증이 만료되었습니다. 다시 로그인해주세요."));
     }
 
+    // 403 Forbidden
+    if (status === 403) {
+      return Promise.reject(new Error("접근 권한이 없습니다."));
+    }
+
+    // 500+ Server errors
+    if (status >= 500) {
+      return Promise.reject(new Error("서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요."));
+    }
+
+    // 4xx Client errors - use server message
     const message =
-      error.response?.data?.error ||
-      error.response?.data?.message ||
-      error.message ||
-      "An unexpected error occurred";
+      error.response.data?.error ||
+      error.response.data?.message ||
+      "요청을 처리할 수 없습니다.";
 
     return Promise.reject(new Error(message));
   }

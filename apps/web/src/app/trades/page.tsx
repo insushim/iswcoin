@@ -252,19 +252,27 @@ export default function TradesPage() {
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
-                const page = i + 1;
-                return (
-                  <Button
-                    key={page}
-                    variant={page === currentPage ? "primary" : "ghost"}
-                    size="sm"
-                    onClick={() => setCurrentPage(page)}
-                  >
-                    {page}
-                  </Button>
-                );
-              })}
+              {(() => {
+                const maxVisible = 5;
+                let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+                const end = Math.min(totalPages, start + maxVisible - 1);
+                if (end - start + 1 < maxVisible) {
+                  start = Math.max(1, end - maxVisible + 1);
+                }
+                return Array.from({ length: end - start + 1 }, (_, i) => {
+                  const page = start + i;
+                  return (
+                    <Button
+                      key={page}
+                      variant={page === currentPage ? "primary" : "ghost"}
+                      size="sm"
+                      onClick={() => setCurrentPage(page)}
+                    >
+                      {page}
+                    </Button>
+                  );
+                });
+              })()}
               <Button
                 variant="ghost"
                 size="sm"

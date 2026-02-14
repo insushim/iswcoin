@@ -8,106 +8,37 @@ import { Button } from "@/components/ui/button";
 import { PageLoader } from "@/components/ui/loading";
 import { useBotStore, type Bot } from "@/stores/bot.store";
 import { Plus, Bot as BotIcon } from "lucide-react";
-import {
-  BotStatus,
-  StrategyType,
-  TradingMode,
-  Exchange,
-} from "@cryptosentinel/shared";
-
-const DEMO_BOTS: Bot[] = [
-  {
-    id: "1",
-    name: "BTC DCA Strategy",
-    symbol: "BTCUSDT",
-    exchange: Exchange.BINANCE,
-    strategy: StrategyType.DCA,
-    mode: TradingMode.PAPER,
-    status: BotStatus.RUNNING,
-    config: { investmentAmount: 100, interval: 24 },
-    pnl: 1245.67,
-    pnlPercent: 12.45,
-    totalTrades: 48,
-    winRate: 62.5,
-    createdAt: "2025-01-15T00:00:00Z",
-    updatedAt: "2025-01-20T00:00:00Z",
-  },
-  {
-    id: "2",
-    name: "ETH Grid Bot",
-    symbol: "ETHUSDT",
-    exchange: Exchange.BINANCE,
-    strategy: StrategyType.GRID,
-    mode: TradingMode.PAPER,
-    status: BotStatus.RUNNING,
-    config: { upperPrice: 4000, lowerPrice: 3000, gridLevels: 20 },
-    pnl: 456.23,
-    pnlPercent: 4.56,
-    totalTrades: 156,
-    winRate: 58.3,
-    createdAt: "2025-01-10T00:00:00Z",
-    updatedAt: "2025-01-20T00:00:00Z",
-  },
-  {
-    id: "3",
-    name: "SOL Momentum",
-    symbol: "SOLUSDT",
-    exchange: Exchange.BYBIT,
-    strategy: StrategyType.MOMENTUM,
-    mode: TradingMode.PAPER,
-    status: BotStatus.RUNNING,
-    config: { rsiPeriod: 14, rsiBuyThreshold: 30, rsiSellThreshold: 70 },
-    pnl: -89.12,
-    pnlPercent: -1.78,
-    totalTrades: 23,
-    winRate: 43.5,
-    createdAt: "2025-01-18T00:00:00Z",
-    updatedAt: "2025-01-20T00:00:00Z",
-  },
-  {
-    id: "4",
-    name: "BNB Mean Reversion",
-    symbol: "BNBUSDT",
-    exchange: Exchange.BINANCE,
-    strategy: StrategyType.MEAN_REVERSION,
-    mode: TradingMode.REAL,
-    status: BotStatus.STOPPED,
-    config: { bollingerPeriod: 20, bollingerStdDev: 2 },
-    pnl: 234.56,
-    pnlPercent: 2.35,
-    totalTrades: 67,
-    winRate: 55.2,
-    createdAt: "2025-01-05T00:00:00Z",
-    updatedAt: "2025-01-19T00:00:00Z",
-  },
-  {
-    id: "5",
-    name: "RL Agent Alpha",
-    symbol: "BTCUSDT",
-    exchange: Exchange.BINANCE,
-    strategy: StrategyType.RL_AGENT,
-    mode: TradingMode.PAPER,
-    status: BotStatus.IDLE,
-    config: { confidenceThreshold: 0.7, maxPositions: 3 },
-    pnl: 0,
-    pnlPercent: 0,
-    totalTrades: 0,
-    winRate: 0,
-    createdAt: "2025-01-20T00:00:00Z",
-    updatedAt: "2025-01-20T00:00:00Z",
-  },
-];
+import { BotStatus } from "@cryptosentinel/shared";
 
 export default function BotsPage() {
-  const { bots, fetchBots, startBot, stopBot, deleteBot, isLoading } = useBotStore();
+  const { bots, fetchBots, startBot, stopBot, deleteBot, isLoading, error } = useBotStore();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [settingsBot, setSettingsBot] = useState<Bot | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchBots().catch(() => {});
+    fetchBots().catch((err) => {
+      setFetchError(err instanceof Error ? err.message : "봇 목록을 불러오는데 실패했습니다");
+    });
   }, [fetchBots]);
 
-  const displayBots = bots.length > 0 ? bots : DEMO_BOTS;
+  const handleDelete = async (id: string) => {
+    const bot = bots.find((b) => b.id === id);
+    if (bot?.status === BotStatus.RUNNING) {
+      const confirmed = window.confirm(
+        "이 봇은 현재 실행 중입니다. 중지 후 삭제하시겠습니까?\n진행 중인 포지션이 방치될 수 있습니다."
+      );
+      if (!confirmed) return;
+    }
+    setDeleteConfirmId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirmId) return;
+    await deleteBot(deleteConfirmId);
+    setDeleteConfirmId(null);
+  };
 
   if (isLoading && bots.length === 0) {
     return <PageLoader />;
@@ -132,8 +63,36 @@ export default function BotsPage() {
         </Button>
       </div>
 
+      {/* Error display */}
+      {(fetchError || error) && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          {fetchError || error}
+        </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      <Modal
+        isOpen={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        title="봇 삭제 확인"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-300">
+            이 봇을 정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없으며, 관련 거래 기록도 함께 삭제됩니다.
+          </p>
+          <div className="flex justify-end gap-3">
+            <Button variant="secondary" size="sm" onClick={() => setDeleteConfirmId(null)}>
+              취소
+            </Button>
+            <Button variant="danger" size="sm" onClick={confirmDelete}>
+              삭제
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Bot grid */}
-      {displayBots.length === 0 ? (
+      {bots.length === 0 && !fetchError ? (
         <div className="flex flex-col items-center justify-center py-20">
           <BotIcon className="h-16 w-16 text-slate-700 mb-4" />
           <h3 className="text-lg font-semibold text-slate-400">봇이 없습니다</h3>
@@ -150,13 +109,13 @@ export default function BotsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {displayBots.map((bot) => (
+          {bots.map((bot) => (
             <BotCard
               key={bot.id}
               bot={bot}
               onStart={startBot}
               onStop={stopBot}
-              onDelete={deleteBot}
+              onDelete={handleDelete}
               onSettings={(b) => setSettingsBot(b)}
             />
           ))}

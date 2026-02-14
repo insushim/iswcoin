@@ -153,6 +153,13 @@ export default function PortfolioPage() {
               </tr>
             </thead>
             <tbody>
+              {displayPositions.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="text-center py-8 text-slate-500">
+                    보유 중인 포지션이 없습니다
+                  </td>
+                </tr>
+              )}
               {displayPositions.map((pos) => (
                 <tr key={pos.symbol}>
                   <td className="font-medium text-white">{pos.symbol}</td>

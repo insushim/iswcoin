@@ -71,10 +71,26 @@ export function CreateBotForm({ onClose }: CreateBotFormProps) {
       return;
     }
 
+    const sym = symbol.trim().toUpperCase();
+    if (!/^[A-Z]{2,10}USDT$/.test(sym) && !/^[A-Z]{2,10}\/USDT$/.test(sym)) {
+      setError("종목 형식이 올바르지 않습니다. 예: BTCUSDT");
+      return;
+    }
+
+    if (mode === TradingMode.REAL) {
+      const confirmed = window.confirm(
+        "⚠️ 실전 투자 모드로 봇을 생성합니다.\n\n" +
+        "실제 자금이 사용되며, 손실이 발생할 수 있습니다.\n" +
+        "API 키가 올바르게 설정되어 있는지 확인하셨나요?\n\n" +
+        "계속 진행하시겠습니까?"
+      );
+      if (!confirmed) return;
+    }
+
     try {
       await createBot({
         name: name.trim(),
-        symbol: symbol.trim().toUpperCase(),
+        symbol: sym.replace("/", ""),
         exchange,
         strategy,
         mode,

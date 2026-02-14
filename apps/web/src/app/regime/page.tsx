@@ -68,14 +68,17 @@ const REGIME_SHORT_LABELS = ["상승 고변", "상승 저변", "하락 고변", 
 
 export default function RegimePage() {
   const [regime, setRegime] = useState<RegimeData | null>(null);
+  const [isDemo, setIsDemo] = useState(false);
 
   useEffect(() => {
     async function fetchRegime() {
       try {
         const res = await api.get(endpoints.regime.current);
         setRegime(res.data.data);
+        setIsDemo(false);
       } catch {
         setRegime(DEMO_REGIME);
+        setIsDemo(true);
       }
     }
     fetchRegime();
@@ -87,6 +90,12 @@ export default function RegimePage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {isDemo && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-400">
+          서버에 연결되지 않아 데모 데이터를 표시 중입니다. 실제 시장 국면과 다를 수 있습니다.
+        </div>
+      )}
+
       {/* Current regime */}
       <Card>
         <div className="flex flex-col items-center sm:flex-row sm:items-start gap-6">

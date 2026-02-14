@@ -31,6 +31,8 @@ export default function DashboardPage() {
   const { tickers, fetchTickers } = useMarketStore();
   const [recentTrades, setRecentTrades] = useState<DashboardTrade[]>([]);
   const [sentimentScore, setSentimentScore] = useState(50);
+  const [isDataLoading, setIsDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   useEffect(() => {
     loadFromStorage();
@@ -38,10 +40,21 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    fetchBots().catch((e) => console.error('Failed to fetch bots:', e));
-    fetchPortfolio().catch((e) => console.error('Failed to fetch portfolio:', e));
-    fetchHistory(30).catch((e) => console.error('Failed to fetch history:', e));
-    fetchTickers().catch((e) => console.error('Failed to fetch tickers:', e));
+    setIsDataLoading(true);
+    setDataError(null);
+
+    Promise.allSettled([
+      fetchBots(),
+      fetchPortfolio(),
+      fetchHistory(30),
+      fetchTickers(),
+    ]).then((results) => {
+      const failures = results.filter((r) => r.status === "rejected");
+      if (failures.length === results.length) {
+        setDataError("서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.");
+      }
+      setIsDataLoading(false);
+    });
 
     // Fetch recent trades
     api.get(endpoints.trades.list, { params: { limit: 10 } })
@@ -87,6 +100,12 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {dataError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          {dataError}
+        </div>
+      )}
+
       {/* Stats */}
       <StatsGrid
         totalValue={summary?.totalValue ?? 0}

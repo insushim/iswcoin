@@ -54,11 +54,14 @@ const TIMEFRAME_OPTIONS = Object.values(Timeframe).map((t) => ({
 export default function MarketPage() {
   const { selectedSymbol, setSelectedSymbol, indicators, sentiment, fetchIndicators, fetchSentiment } = useMarketStore();
   const [timeframe, setTimeframe] = useState(Timeframe.D1);
+  const [isDemo, setIsDemo] = useState(true);
 
   const chartData = useMemo(() => generateDemoOHLCV(90), []);
 
   useEffect(() => {
-    fetchIndicators(selectedSymbol).catch(() => {});
+    fetchIndicators(selectedSymbol)
+      .then(() => setIsDemo(false))
+      .catch(() => setIsDemo(true));
     fetchSentiment().catch(() => {});
   }, [selectedSymbol, fetchIndicators, fetchSentiment]);
 
@@ -109,6 +112,12 @@ export default function MarketPage() {
           />
         </div>
       </div>
+
+      {isDemo && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-400">
+          서버에 연결되지 않아 데모 데이터를 표시 중입니다. 실제 시세와 다를 수 있습니다.
+        </div>
+      )}
 
       {/* Price Chart */}
       <Card padding="sm">
