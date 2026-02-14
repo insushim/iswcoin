@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId, parseJsonBody } from '../utils';
+import { generateId } from '../utils';
 
 type TradeEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -131,7 +131,7 @@ tradeRoutes.get('/:id', async (c) => {
 // POST / - Create trade
 tradeRoutes.post('/', async (c) => {
   const userId = c.get('userId');
-  const body = await parseJsonBody(c.req.raw);
+  const body = await c.req.json();
   const id = generateId();
 
   await c.env.DB.prepare(

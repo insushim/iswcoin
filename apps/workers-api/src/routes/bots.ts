@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId, parseJsonBody } from '../utils';
+import { generateId } from '../utils';
 
 type BotEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -87,7 +87,7 @@ const SYMBOL_REGEX = /^[A-Z0-9]{2,10}\/[A-Z0-9]{2,10}$/;
 // POST / - Create new bot
 botRoutes.post('/', async (c) => {
   const userId = c.get('userId');
-  const body = await parseJsonBody(c.req.raw);
+  const body = await c.req.json();
 
   // 입력 검증
   const name = typeof body.name === 'string' ? body.name.trim() : '';
@@ -138,7 +138,7 @@ botRoutes.post('/', async (c) => {
 botRoutes.put('/:id', async (c) => {
   const userId = c.get('userId');
   const id = c.req.param('id');
-  const body = await parseJsonBody(c.req.raw);
+  const body = await c.req.json();
 
   const existing = await c.env.DB.prepare(
     'SELECT id FROM bots WHERE id = ? AND user_id = ?'
@@ -242,7 +242,7 @@ botRoutes.post('/:id/stop', async (c) => {
 botRoutes.patch('/:id/status', async (c) => {
   const userId = c.get('userId');
   const id = c.req.param('id');
-  const { status } = await parseJsonBody(c.req.raw) as { status: string };
+  const { status } = await c.req.json() as { status: string };
 
   // 상태값 화이트리스트 검증
   const validStatuses = ['RUNNING', 'STOPPED', 'PAUSED', 'ERROR'];

@@ -44,8 +44,13 @@ function checkRateLimit(ip: string, limit: number, windowMs: number): boolean {
 // CORS: 허용 오리진 제한
 app.use('*', cors({
   origin: (origin) => {
-    const allowed = ['https://cryptosentinel.pages.dev', 'http://localhost:3000', 'http://localhost:3001'];
-    return allowed.includes(origin) ? origin : 'https://cryptosentinel.pages.dev';
+    const allowed = [
+      'https://cryptosentinel-web.pages.dev',
+      'https://cryptosentinel.pages.dev',
+      'http://localhost:3000',
+      'http://localhost:3001',
+    ];
+    return allowed.includes(origin) ? origin : allowed[0];
   },
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'X-Engine-Secret'],

@@ -1,13 +1,13 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId, hashPassword, verifyPassword, createJWT, parseJsonBody } from '../utils';
+import { generateId, hashPassword, verifyPassword, createJWT } from '../utils';
 
 type AuthEnv = { Bindings: Env; Variables: AppVariables };
 
 export const authRoutes = new Hono<AuthEnv>();
 
 authRoutes.post('/register', async (c) => {
-  const { email, password, name } = await parseJsonBody(c.req.raw) as { email: string; password: string; name?: string };
+  const { email, password, name } = await c.req.json<{ email: string; password: string; name?: string }>();
   if (!email || !password) return c.json({ error: 'Email and password required' }, 400);
 
   // 입력 검증
@@ -36,7 +36,7 @@ authRoutes.post('/register', async (c) => {
 });
 
 authRoutes.post('/login', async (c) => {
-  const { email, password } = await parseJsonBody(c.req.raw) as { email: string; password: string };
+  const { email, password } = await c.req.json<{ email: string; password: string }>();
   if (!email || !password) return c.json({ error: 'Email and password required' }, 400);
   if (typeof email !== 'string' || typeof password !== 'string') return c.json({ error: 'Invalid input type' }, 400);
 

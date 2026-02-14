@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
-import { generateId, parseJsonBody } from '../utils';
+import { generateId } from '../utils';
 
 type BacktestEnv = { Bindings: Env; Variables: AppVariables };
 export const backtestRoutes = new Hono<BacktestEnv>();
@@ -949,7 +949,7 @@ function backtestRLAgent(prices: DailyPrice[], capital: number, params: Record<s
 
 backtestRoutes.post('/run', async (c) => {
   const userId = c.get('userId');
-  const body = await parseJsonBody(c.req.raw);
+  const body = await c.req.json();
   const symbol = (body.symbol as string) || 'BTCUSDT';
   const strategy = (body.strategy as string) || 'MOMENTUM';
   const startDate = (body.startDate as string) || '2024-10-01';
