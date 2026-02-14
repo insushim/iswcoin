@@ -60,3 +60,13 @@ function loadEnv(): EnvConfig {
 }
 
 export const env = loadEnv();
+
+// 개발 환경 기본값 사용 시 경고
+if (!isProd) {
+  if (!process.env['JWT_SECRET']) {
+    console.warn('[SECURITY] JWT_SECRET이 설정되지 않아 개발용 기본값을 사용합니다. 프로덕션에서는 반드시 환경변수를 설정하세요.');
+  }
+  if (!process.env['ENCRYPTION_KEY']) {
+    console.warn('[SECURITY] ENCRYPTION_KEY가 설정되지 않아 개발용 기본값을 사용합니다. 프로덕션에서는 반드시 환경변수를 설정하세요.');
+  }
+}

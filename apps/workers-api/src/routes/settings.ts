@@ -18,14 +18,11 @@ settingsRoutes.get('/api-keys', async (c) => {
 
   const keys = (results || []).map((row) => {
     const r = row as Record<string, unknown>;
-    const apiKey = r.api_key as string;
     return {
       id: r.id as string,
       exchange: r.exchange as string,
       label: r.label as string || '',
-      keyPreview: apiKey.length > 8
-        ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`
-        : '****',
+      keyPreview: '••••••••', // 암호화된 값이므로 미리보기 불가
       isActive: !!(r.is_active as number),
       createdAt: r.created_at as string,
     };
@@ -200,38 +197,40 @@ settingsRoutes.put('/profile', async (c) => {
   const userId = c.get('userId');
   const body = await parseJsonBody(c.req.raw);
 
-  const updates: string[] = [];
-  const values: unknown[] = [];
+  // 허용 필드 화이트리스트 (동적 SQL 대신 명시적 분기)
+  const name = body.name !== undefined ? String(body.name).trim() : undefined;
+  const email = body.email !== undefined ? String(body.email) : undefined;
 
-  if (body.name !== undefined) {
-    const name = String(body.name).trim();
-    if (name.length > 50) return c.json({ error: 'Name must be 50 characters or less' }, 400);
-    updates.push('name = ?');
-    values.push(name);
+  if (name !== undefined && name.length > 50) {
+    return c.json({ error: 'Name must be 50 characters or less' }, 400);
   }
-  if (body.email !== undefined) {
+  if (email !== undefined) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(String(body.email))) return c.json({ error: 'Invalid email format' }, 400);
-    // Check if email is already taken
+    if (!emailRegex.test(email)) return c.json({ error: 'Invalid email format' }, 400);
     const existingEmail = await c.env.DB.prepare(
       'SELECT id FROM users WHERE email = ? AND id != ?'
-    ).bind(body.email, userId).first();
+    ).bind(email, userId).first();
     if (existingEmail) return c.json({ error: 'Email already in use' }, 409);
-    updates.push('email = ?');
-    values.push(body.email);
   }
 
-  if (updates.length === 0) {
+  if (name === undefined && email === undefined) {
     return c.json({ error: 'No fields to update' }, 400);
   }
 
-  updates.push('updated_at = ?');
-  values.push(new Date().toISOString());
-  values.push(userId);
-
-  await c.env.DB.prepare(
-    `UPDATE users SET ${updates.join(', ')} WHERE id = ?`
-  ).bind(...values).run();
+  const now = new Date().toISOString();
+  if (name !== undefined && email !== undefined) {
+    await c.env.DB.prepare(
+      'UPDATE users SET name = ?, email = ?, updated_at = ? WHERE id = ?'
+    ).bind(name, email, now, userId).run();
+  } else if (name !== undefined) {
+    await c.env.DB.prepare(
+      'UPDATE users SET name = ?, updated_at = ? WHERE id = ?'
+    ).bind(name, now, userId).run();
+  } else {
+    await c.env.DB.prepare(
+      'UPDATE users SET email = ?, updated_at = ? WHERE id = ?'
+    ).bind(email!, now, userId).run();
+  }
 
   const user = await c.env.DB.prepare(
     'SELECT id, email, name, created_at FROM users WHERE id = ?'
@@ -254,6 +253,9 @@ settingsRoutes.put('/password', async (c) => {
   if (newPassword.length < 8) {
     return c.json({ error: 'New password must be at least 8 characters' }, 400);
   }
+  if (!/[A-Z]/.test(newPassword)) return c.json({ error: '대문자를 1개 이상 포함해야 합니다' }, 400);
+  if (!/[a-z]/.test(newPassword)) return c.json({ error: '소문자를 1개 이상 포함해야 합니다' }, 400);
+  if (!/[0-9]/.test(newPassword)) return c.json({ error: '숫자를 1개 이상 포함해야 합니다' }, 400);
 
   // Verify current password
   const user = await c.env.DB.prepare(

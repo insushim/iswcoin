@@ -283,6 +283,15 @@ export class RiskManager {
       ? entryPrice - stopLossDistance
       : entryPrice + stopLossDistance;
 
+    // ATR 손절거리 0 방어 (극단적 저변동성)
+    if (stopLossDistance <= 0) {
+      logger.warn('ATR stop loss distance is zero, falling back to percentage-based sizing');
+      return this.calculatePositionSize(
+        capital, riskPercent, entryPrice,
+        entryPrice * (1 - this.riskConfig.stopLossPercent / 100)
+      );
+    }
+
     // 포지션 크기 = 리스크금액 / ATR손절거리
     let positionSize = riskAmount / stopLossDistance;
     const positionValue = positionSize * entryPrice;

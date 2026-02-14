@@ -56,7 +56,7 @@ const MIN_CONFIDENCE_THRESHOLD = 0.3;
 const MIN_ORDER_VALUE_USDT = 10;
 
 class BotRunnerService {
-  private readonly activeBots: Map<string, { running: boolean; stopped: boolean }> = new Map();
+  private readonly activeBots: Map<string, { running: boolean; stopped: boolean; timerId?: ReturnType<typeof setTimeout> }> = new Map();
   private paperTradeLogs: Map<string, PaperTradeLog[]> = new Map();
   // 포지션 추적 (봇별 심볼별)
   private readonly positions: Map<string, TrackedPosition> = new Map();
@@ -338,7 +338,7 @@ class BotRunnerService {
     }
 
     // setTimeout 체이닝: 이전 반복이 완료된 후에만 다음 반복 스케줄
-    const control = { running: true, stopped: false };
+    const control: { running: boolean; stopped: boolean; timerId?: ReturnType<typeof setTimeout> } = { running: true, stopped: false };
     this.activeBots.set(botId, control);
 
     const runLoop = async () => {
@@ -551,12 +551,12 @@ class BotRunnerService {
 
       // 이전 반복 완료 후 다음 반복 스케줄 (겹침 방지)
       if (!control.stopped) {
-        setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
+        control.timerId = setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
       }
     };
 
     // 첫 반복 스케줄
-    setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
+    control.timerId = setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
   }
 
   /**
@@ -863,6 +863,10 @@ class BotRunnerService {
     if (control) {
       control.stopped = true;
       control.running = false;
+      if (control.timerId) {
+        clearTimeout(control.timerId);
+        control.timerId = undefined;
+      }
       this.activeBots.delete(botId);
     }
   }
@@ -875,6 +879,10 @@ class BotRunnerService {
     for (const [botId, control] of this.activeBots) {
       control.stopped = true;
       control.running = false;
+      if (control.timerId) {
+        clearTimeout(control.timerId);
+        control.timerId = undefined;
+      }
       logger.info('Bot stopped during shutdown', { botId });
     }
     this.activeBots.clear();

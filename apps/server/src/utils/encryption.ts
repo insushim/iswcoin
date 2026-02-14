@@ -34,31 +34,19 @@ export function decrypt(encryptedText: string): string {
   const key = deriveKey(env.ENCRYPTION_KEY);
   const parts = encryptedText.split(':');
 
-  // GCM 형식 (iv:authTag:encrypted) 또는 레거시 CBC 형식 (iv:encrypted) 지원
-  if (parts.length === 3) {
-    const [ivHex, authTagHex, encrypted] = parts as [string, string, string];
-    const iv = Buffer.from(ivHex, 'hex');
-    const authTag = Buffer.from(authTagHex, 'hex');
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
-    decipher.setAuthTag(authTag);
-
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+  if (parts.length !== 3) {
+    throw new Error('Invalid encrypted text format. Only AES-256-GCM (iv:authTag:encrypted) is supported.');
   }
 
-  // 레거시 CBC 형식 호환
-  if (parts.length === 2) {
-    const [ivHex, encrypted] = parts as [string, string];
-    const iv = Buffer.from(ivHex, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, Buffer.concat([iv, Buffer.alloc(16 - iv.length)]));
+  const [ivHex, authTagHex, encrypted] = parts as [string, string, string];
+  const iv = Buffer.from(ivHex, 'hex');
+  const authTag = Buffer.from(authTagHex, 'hex');
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
+  decipher.setAuthTag(authTag);
 
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  }
-
-  throw new Error('Invalid encrypted text format');
+  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
 }
 
 export function hashApiKey(apiKey: string): string {

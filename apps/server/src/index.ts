@@ -100,7 +100,8 @@ app.use((req, _res, next) => {
 
   _res.end = function (this: typeof _res, ...args: Parameters<typeof originalEnd>) {
     const duration = Date.now() - start;
-    logger.debug(`${req.method} ${req.originalUrl} ${_res.statusCode} ${duration}ms`);
+    const urlPath = req.originalUrl.split('?')[0];
+    logger.debug(`${req.method} ${urlPath} ${_res.statusCode} ${duration}ms`);
     return originalEnd.apply(this, args);
   } as typeof originalEnd;
 

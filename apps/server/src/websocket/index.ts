@@ -53,8 +53,7 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
   });
 
   io.use((socket: Socket, next) => {
-    const token = socket.handshake.auth['token'] as string | undefined
-      ?? socket.handshake.query['token'] as string | undefined;
+    const token = socket.handshake.auth['token'] as string | undefined;
 
     if (!token) {
       next(new Error('Authentication required'));

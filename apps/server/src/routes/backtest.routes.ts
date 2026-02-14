@@ -11,6 +11,11 @@ import ccxt from 'ccxt';
 
 const router = Router();
 
+// 동시 백테스트 제한 (CPU 집약적 작업)
+const MAX_CONCURRENT_BACKTESTS = 3;
+let activeBacktests = 0;
+const BACKTEST_TIMEOUT_MS = 120_000; // 2분
+
 // ccxt 인스턴스 싱글턴
 let backtestExchange: import('ccxt').Exchange | null = null;
 function getBacktestExchange(): import('ccxt').Exchange {
@@ -54,6 +59,13 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
     }
 
     const params = validation.data;
+
+    // 동시실행 제한 체크
+    if (activeBacktests >= MAX_CONCURRENT_BACKTESTS) {
+      res.status(429).json({ error: `백테스트 동시 실행 제한 (${MAX_CONCURRENT_BACKTESTS}개) 초과. 잠시 후 다시 시도하세요.` });
+      return;
+    }
+    activeBacktests++;
 
     logger.info('Starting backtest', {
       userId,
@@ -107,7 +119,8 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
       dynamicSlippage: params.dynamicSlippage,
     };
 
-    const result = await backtesterService.runBacktest(
+    // 타임아웃 적용
+    const backtestPromise = backtesterService.runBacktest(
       config,
       ohlcvData,
       () => {
@@ -115,6 +128,12 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
         return (data, cfg) => s.analyze(data, cfg);
       }
     );
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('백테스트 타임아웃 (2분 초과)')), BACKTEST_TIMEOUT_MS)
+    );
+
+    const result = await Promise.race([backtestPromise, timeoutPromise]);
 
     const saved = await prisma.backtestResult.create({
       data: {
@@ -149,7 +168,10 @@ router.post('/run', async (req: AuthenticatedRequest, res: Response): Promise<vo
     });
   } catch (err) {
     logger.error('Backtest failed', { error: String(err), stack: (err as Error).stack });
-    res.status(500).json({ error: 'Backtest failed' });
+    const message = String(err).includes('타임아웃') ? String(err) : 'Backtest failed';
+    res.status(500).json({ error: message });
+  } finally {
+    activeBacktests = Math.max(0, activeBacktests - 1);
   }
 });
 

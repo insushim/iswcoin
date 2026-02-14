@@ -78,20 +78,52 @@ botRoutes.get('/:id', async (c) => {
   return c.json({ data: mapBotToFrontend(bot) });
 });
 
+// 입력 검증 상수
+const VALID_STRATEGIES = ['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB'] as const;
+const VALID_EXCHANGES = ['BINANCE', 'UPBIT', 'BYBIT', 'BITHUMB'] as const;
+const VALID_TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'] as const;
+const SYMBOL_REGEX = /^[A-Z0-9]{2,10}\/[A-Z0-9]{2,10}$/;
+
 // POST / - Create new bot
 botRoutes.post('/', async (c) => {
   const userId = c.get('userId');
   const body = await parseJsonBody(c.req.raw);
-  const id = generateId();
 
+  // 입력 검증
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name || name.length > 100) {
+    return c.json({ error: 'Bot name is required (max 100 chars)' }, 400);
+  }
+
+  const strategy = String(body.strategy || 'DCA');
+  if (!VALID_STRATEGIES.includes(strategy as typeof VALID_STRATEGIES[number])) {
+    return c.json({ error: `Invalid strategy. Allowed: ${VALID_STRATEGIES.join(', ')}` }, 400);
+  }
+
+  const exchange = String(body.exchange || 'BINANCE');
+  if (!VALID_EXCHANGES.includes(exchange as typeof VALID_EXCHANGES[number])) {
+    return c.json({ error: `Invalid exchange. Allowed: ${VALID_EXCHANGES.join(', ')}` }, 400);
+  }
+
+  const symbol = String(body.symbol || 'BTC/USDT');
+  if (!SYMBOL_REGEX.test(symbol)) {
+    return c.json({ error: 'Invalid symbol format. Expected: BASE/QUOTE (e.g. BTC/USDT)' }, 400);
+  }
+
+  const timeframe = String(body.timeframe || '1h');
+  if (!VALID_TIMEFRAMES.includes(timeframe as typeof VALID_TIMEFRAMES[number])) {
+    return c.json({ error: `Invalid timeframe. Allowed: ${VALID_TIMEFRAMES.join(', ')}` }, 400);
+  }
+
+  const id = generateId();
   const config = { ...(body.config || {}), mode: body.mode || 'PAPER' };
 
   await c.env.DB.prepare(
     'INSERT INTO bots (id, user_id, name, strategy, exchange, symbol, timeframe, config, risk_config) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
-    id, userId, body.name, body.strategy || 'DCA',
-    body.exchange || 'BINANCE', body.symbol || 'BTC/USDT',
-    body.timeframe || '1h',
+    id, userId, name, strategy,
+    exchange, symbol,
+    timeframe,
     JSON.stringify(config),
     JSON.stringify(body.riskConfig || {})
   ).run();
@@ -117,11 +149,35 @@ botRoutes.put('/:id', async (c) => {
   const updates: string[] = [];
   const values: unknown[] = [];
 
-  if (body.name !== undefined) { updates.push('name = ?'); values.push(body.name); }
-  if (body.strategy !== undefined) { updates.push('strategy = ?'); values.push(body.strategy); }
-  if (body.exchange !== undefined) { updates.push('exchange = ?'); values.push(body.exchange); }
-  if (body.symbol !== undefined) { updates.push('symbol = ?'); values.push(body.symbol); }
-  if (body.timeframe !== undefined) { updates.push('timeframe = ?'); values.push(body.timeframe); }
+  if (body.name !== undefined) {
+    const n = String(body.name).trim();
+    if (!n || n.length > 100) return c.json({ error: 'Bot name is required (max 100 chars)' }, 400);
+    updates.push('name = ?'); values.push(n);
+  }
+  if (body.strategy !== undefined) {
+    if (!VALID_STRATEGIES.includes(String(body.strategy) as typeof VALID_STRATEGIES[number])) {
+      return c.json({ error: `Invalid strategy. Allowed: ${VALID_STRATEGIES.join(', ')}` }, 400);
+    }
+    updates.push('strategy = ?'); values.push(body.strategy);
+  }
+  if (body.exchange !== undefined) {
+    if (!VALID_EXCHANGES.includes(String(body.exchange) as typeof VALID_EXCHANGES[number])) {
+      return c.json({ error: `Invalid exchange. Allowed: ${VALID_EXCHANGES.join(', ')}` }, 400);
+    }
+    updates.push('exchange = ?'); values.push(body.exchange);
+  }
+  if (body.symbol !== undefined) {
+    if (!SYMBOL_REGEX.test(String(body.symbol))) {
+      return c.json({ error: 'Invalid symbol format. Expected: BASE/QUOTE (e.g. BTC/USDT)' }, 400);
+    }
+    updates.push('symbol = ?'); values.push(body.symbol);
+  }
+  if (body.timeframe !== undefined) {
+    if (!VALID_TIMEFRAMES.includes(String(body.timeframe) as typeof VALID_TIMEFRAMES[number])) {
+      return c.json({ error: `Invalid timeframe. Allowed: ${VALID_TIMEFRAMES.join(', ')}` }, 400);
+    }
+    updates.push('timeframe = ?'); values.push(body.timeframe);
+  }
   if (body.config !== undefined) { updates.push('config = ?'); values.push(JSON.stringify(body.config)); }
   if (body.riskConfig !== undefined) { updates.push('risk_config = ?'); values.push(JSON.stringify(body.riskConfig)); }
 

@@ -480,6 +480,31 @@ export class ExchangeService {
     return exchange;
   }
 
+  /**
+   * Exchange 인스턴스 정리 (봇 삭제 시 호출)
+   */
+  removeExchange(key: string): void {
+    this.exchanges.delete(key);
+    this.circuitBreakers.delete(`ticker:${key}`);
+    this.circuitBreakers.delete(`ohlcv:${key}`);
+    this.circuitBreakers.delete(`orderbook:${key}`);
+  }
+
+  removePaperExchange(exchangeName: SupportedExchange): void {
+    this.paperExchanges.delete(`paper:${exchangeName}`);
+  }
+
+  /**
+   * 서버 종료 시 리소스 정리
+   */
+  destroy(): void {
+    clearInterval(this.cacheCleanupTimer);
+    this.cache.clear();
+    this.exchanges.clear();
+    this.paperExchanges.clear();
+    this.circuitBreakers.clear();
+  }
+
   getExchangeNameFromEnum(exchangeEnum: string): SupportedExchange {
     const mapping: Record<string, SupportedExchange> = {
       BINANCE: 'binance',
