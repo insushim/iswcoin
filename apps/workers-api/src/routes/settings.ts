@@ -50,15 +50,19 @@ settingsRoutes.post('/api-keys', async (c) => {
   }
 
   const id = generateId();
-  const encryptionSecret = c.env.ENCRYPTION_SECRET || 'default-encryption-key';
+  const encryptionSecret = c.env.ENCRYPTION_SECRET;
+  if (!encryptionSecret) {
+    return c.json({ error: 'Server encryption not configured. Contact administrator.' }, 500);
+  }
   const encryptedApiKey = await encryptApiKey(apiKey, encryptionSecret);
   const encryptedSecretKey = await encryptApiKey(secretKey, encryptionSecret);
+  const encryptedPassphrase = passphrase ? await encryptApiKey(passphrase, encryptionSecret) : null;
 
   await c.env.DB.prepare(
     'INSERT INTO api_keys (id, user_id, exchange, api_key, secret_key, passphrase, label) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).bind(
     id, userId, exchange, encryptedApiKey, encryptedSecretKey,
-    passphrase || null, label || null
+    encryptedPassphrase, label || null
   ).run();
 
   return c.json({

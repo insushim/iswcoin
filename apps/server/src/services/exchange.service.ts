@@ -309,8 +309,8 @@ export class ExchangeService {
   }
 
   async getTicker(exchange: Exchange, symbol: string): Promise<Ticker> {
-    // 5초 캐시
-    const cacheKey = `ticker:${symbol}`;
+    // 5초 캐시 (거래소별 구분)
+    const cacheKey = `ticker:${exchange.id ?? 'default'}:${symbol}`;
     const cached = this.getCached<Ticker>(cacheKey);
     if (cached) return cached;
 
@@ -330,8 +330,8 @@ export class ExchangeService {
     timeframe: string = '1h',
     limit: number = 100
   ): Promise<OHLCV[]> {
-    // 30초 캐시
-    const cacheKey = `ohlcv:${symbol}:${timeframe}:${limit}`;
+    // 30초 캐시 (거래소별 구분)
+    const cacheKey = `ohlcv:${exchange.id ?? 'default'}:${symbol}:${timeframe}:${limit}`;
     const cached = this.getCached<OHLCV[]>(cacheKey);
     if (cached) return cached;
 
@@ -346,8 +346,8 @@ export class ExchangeService {
   }
 
   async getOrderBook(exchange: Exchange, symbol: string, limit: number = 20): Promise<OrderBook> {
-    // 2초 캐시
-    const cacheKey = `orderbook:${symbol}:${limit}`;
+    // 2초 캐시 (거래소별 구분)
+    const cacheKey = `orderbook:${exchange.id ?? 'default'}:${symbol}:${limit}`;
     const cached = this.getCached<OrderBook>(cacheKey);
     if (cached) return cached;
 
@@ -450,6 +450,28 @@ export class ExchangeService {
     logger.info('Paginated OHLCV fetched', { symbol, timeframe, totalCandles: result.length });
 
     return result;
+  }
+
+  /**
+   * 공개 API용 Exchange 인스턴스 (API 키 불필요, Paper 모드에서 시세 조회용)
+   */
+  getPublicExchange(exchangeName: SupportedExchange): Exchange {
+    const key = `public:${exchangeName}`;
+    const cached = this.exchanges.get(key);
+    if (cached) return cached;
+
+    const ExchangeClass = ccxt[exchangeName];
+    if (!ExchangeClass) {
+      throw new Error(`Unsupported exchange: ${exchangeName}`);
+    }
+
+    const exchange = new ExchangeClass({
+      enableRateLimit: true,
+      options: { defaultType: 'spot' },
+    });
+
+    this.exchanges.set(key, exchange);
+    return exchange;
   }
 
   getExchangeNameFromEnum(exchangeEnum: string): SupportedExchange {

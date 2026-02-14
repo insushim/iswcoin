@@ -174,8 +174,12 @@ export class ExecutionService {
 
     const executedOrders: ExecutionResult['orders'] = [];
     let remainingAmount = order.totalAmount;
+    const maxIterations = Math.ceil(order.totalAmount / visibleSize) * 3; // 안전 상한
+    let iterations = 0;
+    let consecutiveZeroFills = 0;
 
-    while (remainingAmount > 0) {
+    while (remainingAmount > 0 && iterations < maxIterations) {
+      iterations++;
       const sliceAmount = Math.min(visibleSize, remainingAmount);
 
       try {
@@ -188,20 +192,34 @@ export class ExecutionService {
           order.price
         );
 
+        const filled = result.filled ?? 0;
+
         executedOrders.push({
           id: result.id,
           price: result.average ?? result.price ?? order.price,
           amount: sliceAmount,
-          filled: result.filled ?? 0,
+          filled,
           timestamp: result.timestamp ?? Date.now(),
           status: result.status ?? 'open',
         });
 
-        remainingAmount -= result.filled ?? sliceAmount;
+        if (filled > 0) {
+          remainingAmount -= filled;
+          consecutiveZeroFills = 0;
+        } else {
+          consecutiveZeroFills++;
+          if (consecutiveZeroFills >= 5) {
+            logger.warn('Iceberg: 5 consecutive zero-fill slices, stopping', {
+              remaining: remainingAmount,
+            });
+            break;
+          }
+        }
 
         logger.debug('Iceberg slice executed', {
-          filled: result.filled,
+          filled,
           remaining: remainingAmount,
+          iteration: iterations,
         });
 
         await this.sleep(500);
@@ -209,6 +227,10 @@ export class ExecutionService {
         logger.error('Iceberg slice failed', { error: String(err), remaining: remainingAmount });
         break;
       }
+    }
+
+    if (iterations >= maxIterations) {
+      logger.warn('Iceberg: max iterations reached', { remaining: remainingAmount });
     }
 
     return this.aggregateResults(executedOrders);
@@ -266,8 +288,19 @@ export class ExecutionService {
       logger.warn('Failed to fetch Upbit price for premium', { error: String(err) });
     }
 
+    // 가격 중 하나라도 0이면 프리미엄 계산 불가
+    if (binancePrice <= 0 || upbitPrice <= 0) {
+      logger.warn('Cannot calculate kimchi premium: missing price data', {
+        symbol, binancePrice, upbitPrice,
+      });
+      return {
+        symbol, binancePrice, upbitPrice,
+        premiumPercent: 0, premiumAbsolute: 0, timestamp: Date.now(),
+      };
+    }
+
     const premiumAbsolute = upbitPrice - binancePrice;
-    const premiumPercent = binancePrice > 0 ? (premiumAbsolute / binancePrice) * 100 : 0;
+    const premiumPercent = (premiumAbsolute / binancePrice) * 100;
 
     const result: KimchiPremium = {
       symbol,

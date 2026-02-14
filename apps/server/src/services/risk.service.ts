@@ -203,7 +203,8 @@ export class RiskManager {
     const trailDistance = atr * multiplier;
     const stopPrice = highestPrice - trailDistance;
 
-    const triggered = currentPrice <= stopPrice && currentPrice < entryPrice * (1 + 0.001);
+    // 트레일링 스탑: 최고점에서 하락 시 발동 (수익/손실 무관)
+    const triggered = currentPrice <= stopPrice;
 
     return { stopPrice, triggered };
   }
@@ -263,7 +264,8 @@ export class RiskManager {
     capital: number,
     riskPercent: number,
     entryPrice: number,
-    atr: number
+    atr: number,
+    isLong: boolean = true
   ): PositionSizeResult {
     if (!this.riskConfig.atrPositionSizingEnabled || atr <= 0) {
       return this.calculatePositionSize(
@@ -275,9 +277,11 @@ export class RiskManager {
     const effectiveRisk = Math.min(riskPercent, this.riskConfig.maxTradeRiskPercent);
     const riskAmount = capital * (effectiveRisk / 100);
 
-    // ATR 기반 손절가
+    // ATR 기반 손절가 (롱/숏 구분)
     const stopLossDistance = atr * this.riskConfig.atrMultiplierSL;
-    const stopLossPrice = entryPrice - stopLossDistance;
+    const stopLossPrice = isLong
+      ? entryPrice - stopLossDistance
+      : entryPrice + stopLossDistance;
 
     // 포지션 크기 = 리스크금액 / ATR손절거리
     let positionSize = riskAmount / stopLossDistance;
@@ -288,11 +292,12 @@ export class RiskManager {
       positionSize = maxPositionValue / entryPrice;
     }
 
-    // ATR 기반 익절가
+    // ATR 기반 익절가 (롱/숏 구분)
+    const direction = isLong ? 1 : -1;
     const takeProfitLevels = [
-      { price: entryPrice + atr * this.riskConfig.atrMultiplierTP * 0.5, percentage: 30 },
-      { price: entryPrice + atr * this.riskConfig.atrMultiplierTP, percentage: 40 },
-      { price: entryPrice + atr * this.riskConfig.atrMultiplierTP * 1.5, percentage: 30 },
+      { price: entryPrice + direction * atr * this.riskConfig.atrMultiplierTP * 0.5, percentage: 30 },
+      { price: entryPrice + direction * atr * this.riskConfig.atrMultiplierTP, percentage: 40 },
+      { price: entryPrice + direction * atr * this.riskConfig.atrMultiplierTP * 1.5, percentage: 30 },
     ];
 
     logger.debug('ATR position sizing', {
@@ -407,7 +412,8 @@ export class RiskManager {
     // Z-score 근사: 95% → 1.645, 99% → 2.326
     const zScore = confidenceLevel >= 0.99 ? 2.326 : 1.645;
 
-    return portfolioValue * (mean - zScore * std);
+    // VaR는 양수로 "잠재적 최대 손실"을 표현
+    return portfolioValue * (zScore * std - mean);
   }
 
   getConfig(): RiskConfig {

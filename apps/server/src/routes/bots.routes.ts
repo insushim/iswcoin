@@ -230,6 +230,12 @@ router.post('/:id/start', async (req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
+    // 이중 시작 방지: 메모리 내 활성 봇 체크
+    if (botRunnerService.getActiveBotCount() > 0 && botRunnerService.getBotPosition(botId, bot.symbol) !== null) {
+      res.status(400).json({ error: 'Bot loop is already active in memory' });
+      return;
+    }
+
     if (bot.mode === 'REAL') {
       const apiKey = await prisma.apiKey.findFirst({
         where: { userId, exchange: bot.exchange, isActive: true },

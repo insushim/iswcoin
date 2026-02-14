@@ -5,6 +5,7 @@ import { logger } from '../utils/logger.js';
 import { riskManager } from '../services/risk.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { emitTickerUpdate, emitBotStatus } from '../websocket/index.js';
+import { botRunnerService } from '../services/bot-runner.service.js';
 import { getDateRanges } from '../utils/date.js';
 
 const DURATIONS = {
@@ -80,6 +81,8 @@ export function startScheduler(): void {
         if (!riskCheck.allowed) {
           logger.warn('Risk limit breached', { botId: bot.id, reason: riskCheck.reason });
 
+          // 봇 루프 실제로 중지 + DB 상태 업데이트
+          botRunnerService.stopBotLoop(bot.id);
           await prisma.bot.update({
             where: { id: bot.id },
             data: { status: 'STOPPED' },
