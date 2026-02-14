@@ -34,7 +34,9 @@ export class SentimentService {
     }
 
     try {
-      const response = await fetch('https://api.alternative.me/fng/?limit=1&format=json');
+      const response = await fetch('https://api.alternative.me/fng/?limit=1&format=json', {
+        signal: AbortSignal.timeout(10000),
+      });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);

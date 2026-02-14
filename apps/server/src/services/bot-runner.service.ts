@@ -56,7 +56,7 @@ const MIN_CONFIDENCE_THRESHOLD = 0.3;
 const MIN_ORDER_VALUE_USDT = 10;
 
 class BotRunnerService {
-  private readonly activeBots: Map<string, NodeJS.Timeout> = new Map();
+  private readonly activeBots: Map<string, { running: boolean; stopped: boolean }> = new Map();
   private paperTradeLogs: Map<string, PaperTradeLog[]> = new Map();
   // 포지션 추적 (봇별 심볼별)
   private readonly positions: Map<string, TrackedPosition> = new Map();
@@ -337,7 +337,13 @@ class BotRunnerService {
       }
     }
 
-    const interval = setInterval(async () => {
+    // setTimeout 체이닝: 이전 반복이 완료된 후에만 다음 반복 스케줄
+    const control = { running: true, stopped: false };
+    this.activeBots.set(botId, control);
+
+    const runLoop = async () => {
+      if (control.stopped) return;
+
       try {
         const exchange = cachedExchange;
         if (mode === 'REAL' && !exchange) {
@@ -542,9 +548,15 @@ class BotRunnerService {
           },
         }).catch(() => {});
       }
-    }, BOT_LOOP_INTERVAL_MS);
 
-    this.activeBots.set(botId, interval);
+      // 이전 반복 완료 후 다음 반복 스케줄 (겹침 방지)
+      if (!control.stopped) {
+        setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
+      }
+    };
+
+    // 첫 반복 스케줄
+    setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
   }
 
   /**
@@ -847,9 +859,10 @@ class BotRunnerService {
    * 봇 트레이딩 루프 중지
    */
   stopBotLoop(botId: string): void {
-    const interval = this.activeBots.get(botId);
-    if (interval) {
-      clearInterval(interval);
+    const control = this.activeBots.get(botId);
+    if (control) {
+      control.stopped = true;
+      control.running = false;
       this.activeBots.delete(botId);
     }
   }
@@ -859,8 +872,9 @@ class BotRunnerService {
    */
   stopAllBots(): void {
     const count = this.activeBots.size;
-    for (const [botId, interval] of this.activeBots) {
-      clearInterval(interval);
+    for (const [botId, control] of this.activeBots) {
+      control.stopped = true;
+      control.running = false;
       logger.info('Bot stopped during shutdown', { botId });
     }
     this.activeBots.clear();

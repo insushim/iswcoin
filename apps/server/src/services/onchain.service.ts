@@ -81,7 +81,8 @@ export class OnchainAnalyticsService {
 
     try {
       const response = await fetch(
-        `https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol.replace('/', '')}&limit=1`
+        `https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol.replace('/', '')}&limit=1`,
+        { signal: AbortSignal.timeout(10000) }
       );
 
       if (!response.ok) {
@@ -152,7 +153,9 @@ export class OnchainAnalyticsService {
 
   async getGasPrice(): Promise<{ slow: number; standard: number; fast: number }> {
     try {
-      const response = await fetch('https://api.etherscan.io/api?module=gastracker&action=gasoracle');
+      const response = await fetch('https://api.etherscan.io/api?module=gastracker&action=gasoracle', {
+        signal: AbortSignal.timeout(10000),
+      });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }

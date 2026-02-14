@@ -284,6 +284,7 @@ export class ExchangeService {
       apiKey,
       secret: apiSecret,
       enableRateLimit: true,
+      timeout: 15000,
       options: {
         defaultType: 'spot',
         adjustForTimeDifference: true,
@@ -467,6 +468,7 @@ export class ExchangeService {
 
     const exchange = new ExchangeClass({
       enableRateLimit: true,
+      timeout: 15000,
       options: { defaultType: 'spot' },
     });
 

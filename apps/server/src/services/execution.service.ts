@@ -244,7 +244,8 @@ export class ExecutionService {
 
     try {
       const binanceResponse = await fetch(
-        `https://api.binance.com/api/v3/ticker/price?symbol=${symbol.replace('/', '')}`
+        `https://api.binance.com/api/v3/ticker/price?symbol=${symbol.replace('/', '')}`,
+        { signal: AbortSignal.timeout(10000) }
       );
 
       if (binanceResponse.ok) {
@@ -258,7 +259,8 @@ export class ExecutionService {
     try {
       const baseSymbol = symbol.split('/')[0] ?? 'BTC';
       const upbitResponse = await fetch(
-        `https://api.upbit.com/v1/ticker?markets=KRW-${baseSymbol}`
+        `https://api.upbit.com/v1/ticker?markets=KRW-${baseSymbol}`,
+        { signal: AbortSignal.timeout(10000) }
       );
 
       if (upbitResponse.ok) {
@@ -269,7 +271,8 @@ export class ExecutionService {
           let usdKrw = 1350;
           try {
             const fxResponse = await fetch(
-              'https://api.upbit.com/v1/ticker?markets=CRIX.UPBIT.FRX.KRWUSD'
+              'https://api.upbit.com/v1/ticker?markets=CRIX.UPBIT.FRX.KRWUSD',
+              { signal: AbortSignal.timeout(5000) }
             );
             if (fxResponse.ok) {
               const fxData = (await fxResponse.json()) as Array<{ trade_price: number }>;
