@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { exchangeService } from '../services/exchange.service.js';
 import { indicatorsService } from '../services/indicators.service.js';
+import { sentimentService } from '../services/sentiment.service.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
@@ -30,6 +31,56 @@ const indicatorsQuerySchema = z.object({
 });
 
 router.use(authMiddleware);
+
+// GET /tickers - 주요 종목 시세 일괄 조회
+const DEFAULT_TICKERS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT'];
+
+router.get('/tickers', async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const exchange = getPublicExchange();
+    const tickers = await Promise.allSettled(
+      DEFAULT_TICKERS.map((sym) => exchangeService.getTicker(exchange, sym))
+    );
+
+    const result = tickers.map((t, i) => {
+      if (t.status === 'fulfilled') {
+        const tk = t.value;
+        return {
+          symbol: tk.symbol,
+          last: tk.last,
+          bid: tk.bid,
+          ask: tk.ask,
+          high: tk.high,
+          low: tk.low,
+          volume: tk.baseVolume,
+          quoteVolume: tk.quoteVolume,
+          change: tk.change,
+          percentage: tk.percentage,
+          timestamp: tk.timestamp,
+        };
+      }
+      return { symbol: DEFAULT_TICKERS[i], error: 'Failed to fetch' };
+    });
+
+    res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=10');
+    res.json({ data: result });
+  } catch (err) {
+    logger.error('Failed to fetch tickers', { error: String(err) });
+    res.status(500).json({ error: 'Failed to fetch tickers' });
+  }
+});
+
+// GET /sentiment - 시장 심리 지표
+router.get('/sentiment', async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const sentiment = await sentimentService.aggregateSentiment();
+    res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+    res.json({ data: sentiment });
+  } catch (err) {
+    logger.error('Failed to fetch sentiment', { error: String(err) });
+    res.status(500).json({ error: 'Failed to fetch sentiment data' });
+  }
+});
 
 router.get('/ticker/:symbol', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -135,7 +186,8 @@ router.get('/indicators/:symbol', async (req: AuthenticatedRequest, res: Respons
 router.get('/orderbook/:symbol', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const symbol = decodeURIComponent(req.params['symbol'] ?? '');
-    const limit = parseInt(String(req.query['limit'] ?? '20'), 10);
+    const rawLimit = parseInt(String(req.query['limit'] ?? '20'), 10);
+    const limit = Math.max(1, Math.min(100, isNaN(rawLimit) ? 20 : rawLimit));
 
     const exchange = getPublicExchange();
     const orderbook = await exchangeService.getOrderBook(exchange, symbol, limit);

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { generateToken } from '../middleware/auth.js';
+import { authMiddleware, type AuthenticatedRequest, generateToken } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
 
 const router = Router();
@@ -138,6 +138,55 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
   } catch (err) {
     logger.error('Login failed', { error: String(err) });
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// GET /me - 현재 로그인된 유저 정보
+router.get('/me', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+      },
+    });
+
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    res.json({ user });
+  } catch (err) {
+    logger.error('Failed to get user profile', { error: String(err) });
+    res.status(500).json({ error: 'Failed to get user profile' });
+  }
+});
+
+// POST /refresh - 토큰 갱신
+router.post('/refresh', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user?.userId;
+    const email = req.user?.email;
+    if (!userId || !email) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const token = generateToken({ userId, email });
+    res.json({ token });
+  } catch (err) {
+    logger.error('Token refresh failed', { error: String(err) });
+    res.status(500).json({ error: 'Token refresh failed' });
   }
 });
 

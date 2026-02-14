@@ -200,6 +200,10 @@ export class PaperExchange {
     };
 
     this.orders.push(order);
+    // 메모리 보호: 최대 10000개 주문 유지
+    if (this.orders.length > 10000) {
+      this.orders = this.orders.slice(-5000);
+    }
     logger.info('PaperExchange: order executed', {
       id: order.id,
       symbol,

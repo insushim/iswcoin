@@ -14,6 +14,9 @@ authRoutes.post('/register', async (c) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) return c.json({ error: 'Invalid email format' }, 400);
   if (password.length < 8) return c.json({ error: 'Password must be at least 8 characters' }, 400);
+  if (!/[A-Z]/.test(password)) return c.json({ error: '대문자를 1개 이상 포함해야 합니다' }, 400);
+  if (!/[a-z]/.test(password)) return c.json({ error: '소문자를 1개 이상 포함해야 합니다' }, 400);
+  if (!/[0-9]/.test(password)) return c.json({ error: '숫자를 1개 이상 포함해야 합니다' }, 400);
   if (name && name.length > 50) return c.json({ error: 'Name must be 50 characters or less' }, 400);
 
   const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
@@ -42,6 +45,12 @@ authRoutes.post('/login', async (c) => {
 
   const valid = await verifyPassword(password, user.password_hash);
   if (!valid) return c.json({ error: 'Invalid credentials' }, 401);
+
+  // 레거시 SHA-256 해시 자동 마이그레이션 → PBKDF2
+  if (!user.password_hash.startsWith('pbkdf2:')) {
+    const newHash = await hashPassword(password);
+    await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
+  }
 
   const token = await createJWT({ userId: user.id, email: user.email }, c.env.JWT_SECRET);
   return c.json({ data: { token, user: { id: user.id, email: user.email, name: user.name } } });

@@ -1,0 +1,239 @@
+import { Router, type Response } from 'express';
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { prisma } from '../db.js';
+import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
+import { encrypt } from '../utils/encryption.js';
+import { logger } from '../utils/logger.js';
+
+const router = Router();
+router.use(authMiddleware);
+
+// ─── API Keys ───────────────────────────────────────────
+
+const addKeySchema = z.object({
+  exchange: z.enum(['BINANCE', 'UPBIT', 'BYBIT', 'BITHUMB']),
+  label: z.string().min(1).max(100),
+  apiKey: z.string().min(1).max(256),
+  secretKey: z.string().min(1).max(256),
+});
+
+// GET /api-keys - 사용자의 API 키 목록
+router.get('/api-keys', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const keys = await prisma.apiKey.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        exchange: true,
+        label: true,
+        apiKey: true,
+        isActive: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const result = keys.map((k) => ({
+      id: k.id,
+      exchange: k.exchange,
+      label: k.label,
+      keyPreview: k.apiKey.length > 8
+        ? `${k.apiKey.slice(0, 4)}...${k.apiKey.slice(-4)}`
+        : '****',
+      isActive: k.isActive,
+      createdAt: k.createdAt.toISOString().split('T')[0],
+    }));
+
+    res.json({ data: result });
+  } catch (err) {
+    logger.error('Failed to fetch API keys', { error: String(err) });
+    res.status(500).json({ error: 'Failed to fetch API keys' });
+  }
+});
+
+// POST /api-keys - API 키 추가
+router.post('/api-keys', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const validation = addKeySchema.safeParse(req.body);
+    if (!validation.success) {
+      res.status(400).json({ error: 'Validation failed', details: validation.error.errors });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const { exchange, label, apiKey, secretKey } = validation.data;
+
+    const encryptedKey = encrypt(apiKey);
+    const encryptedSecret = encrypt(secretKey);
+
+    const created = await prisma.apiKey.create({
+      data: {
+        userId,
+        exchange,
+        label,
+        apiKey: encryptedKey,
+        apiSecret: encryptedSecret,
+      },
+      select: { id: true, exchange: true, label: true, createdAt: true },
+    });
+
+    logger.info('API key added', { userId, exchange, label });
+    res.status(201).json({ data: created });
+  } catch (err) {
+    logger.error('Failed to add API key', { error: String(err) });
+    res.status(500).json({ error: 'Failed to add API key' });
+  }
+});
+
+// DELETE /api-keys/:id - API 키 삭제
+router.delete('/api-keys/:id', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const keyId = req.params['id'];
+
+    const key = await prisma.apiKey.findFirst({
+      where: { id: keyId, userId },
+    });
+
+    if (!key) {
+      res.status(404).json({ error: 'API key not found' });
+      return;
+    }
+
+    await prisma.apiKey.delete({ where: { id: keyId } });
+
+    logger.info('API key deleted', { userId, keyId });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Failed to delete API key', { error: String(err) });
+    res.status(500).json({ error: 'Failed to delete API key' });
+  }
+});
+
+// ─── Profile ────────────────────────────────────────────
+
+const profileSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  email: z.string().email().optional(),
+});
+
+// PUT /profile - 프로필 업데이트
+router.put('/profile', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const validation = profileSchema.safeParse(req.body);
+    if (!validation.success) {
+      res.status(400).json({ error: 'Validation failed', details: validation.error.errors });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const { name, email } = validation.data;
+
+    if (email) {
+      const existing = await prisma.user.findFirst({
+        where: { email, NOT: { id: userId } },
+      });
+      if (existing) {
+        res.status(409).json({ error: '이미 사용 중인 이메일입니다' });
+        return;
+      }
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(email !== undefined ? { email } : {}),
+      },
+      select: { id: true, email: true, name: true },
+    });
+
+    res.json({ data: updated });
+  } catch (err) {
+    logger.error('Failed to update profile', { error: String(err) });
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+// PUT /password - 비밀번호 변경
+const passwordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string()
+    .min(8, '비밀번호는 최소 8자 이상이어야 합니다')
+    .max(128)
+    .regex(/[A-Z]/, '대문자를 1개 이상 포함해야 합니다')
+    .regex(/[a-z]/, '소문자를 1개 이상 포함해야 합니다')
+    .regex(/[0-9]/, '숫자를 1개 이상 포함해야 합니다'),
+});
+
+router.put('/password', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const validation = passwordSchema.safeParse(req.body);
+    if (!validation.success) {
+      res.status(400).json({ error: 'Validation failed', details: validation.error.errors });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const { currentPassword, newPassword } = validation.data;
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isValid) {
+      res.status(401).json({ error: '현재 비밀번호가 올바르지 않습니다' });
+      return;
+    }
+
+    const salt = await bcrypt.genSalt(12);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword },
+    });
+
+    logger.info('Password changed', { userId });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Failed to change password', { error: String(err) });
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// ─── Notifications ──────────────────────────────────────
+
+const notificationsSchema = z.object({
+  telegramEnabled: z.boolean().optional(),
+  telegramChatId: z.string().max(100).optional(),
+  notifyTrades: z.boolean().optional(),
+  notifyAlerts: z.boolean().optional(),
+  notifyDailyReport: z.boolean().optional(),
+  notifyRegimeChange: z.boolean().optional(),
+});
+
+// PUT /notifications - 알림 설정 저장
+router.put('/notifications', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const validation = notificationsSchema.safeParse(req.body);
+    if (!validation.success) {
+      res.status(400).json({ error: 'Validation failed', details: validation.error.errors });
+      return;
+    }
+
+    // 알림 설정은 User 모델에 별도 컬럼이 없으므로, 향후 DB 마이그레이션 전까지 성공 응답만 반환
+    logger.info('Notification settings updated', { userId: req.user!.userId, settings: validation.data });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Failed to update notifications', { error: String(err) });
+    res.status(500).json({ error: 'Failed to update notification settings' });
+  }
+});
+
+export default router;

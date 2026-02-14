@@ -90,7 +90,7 @@ export const endpoints = {
   trades: {
     list: "/trades",
     get: (id: string) => `/trades/${id}`,
-    stats: "/trades/stats",
+    stats: "/trades/summary",
   },
   market: {
     tickers: "/market/tickers",

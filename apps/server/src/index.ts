@@ -18,6 +18,7 @@ import portfolioRoutes from './routes/portfolio.routes.js';
 import regimeRoutes from './routes/regime.routes.js';
 import orderbookRoutes from './routes/orderbook.routes.js';
 import onchainRoutes from './routes/onchain.routes.js';
+import settingsRoutes from './routes/settings.routes.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -122,6 +123,7 @@ app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/regime', regimeRoutes);
 app.use('/api/orderbook', orderbookRoutes);
 app.use('/api/onchain', onchainRoutes);
+app.use('/api/settings', settingsRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
