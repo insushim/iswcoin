@@ -174,7 +174,7 @@ async function gracefulShutdown(signal: string) {
   logger.info(`${signal} received, shutting down gracefully`);
   httpServer.close(async () => {
     try {
-      botRunnerService.stopAllBots();
+      await botRunnerService.stopAllBots();
       const { prisma } = await import('./db.js');
       await prisma.$disconnect();
       logger.info('Database disconnected');

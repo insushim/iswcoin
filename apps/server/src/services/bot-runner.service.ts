@@ -60,6 +60,9 @@ class BotRunnerService {
   private paperTradeLogs: Map<string, PaperTradeLog[]> = new Map();
   // 포지션 추적 (봇별 심볼별)
   private readonly positions: Map<string, TrackedPosition> = new Map();
+  // Paper 모드 상태 영속화용
+  private paperBalances: Map<string, Record<string, number>> = new Map();
+  private paperPositions: Map<string, Map<string, TrackedPosition>> = new Map();
 
   // ===== 포지션 관리 =====
   private getPositionKey(botId: string, symbol: string): string {
@@ -303,6 +306,75 @@ class BotRunnerService {
   }
 
   /**
+   * Paper 모드 상태를 DB에 저장 (봇 중지 시 호출)
+   */
+  private async savePaperState(botId: string): Promise<void> {
+    const state = this.paperBalances.get(botId);
+    const positions = this.paperPositions.get(botId);
+    if (!state && !positions) return;
+
+    try {
+      const bot = await prisma.bot.findUnique({
+        where: { id: botId },
+        select: { riskConfig: true },
+      });
+
+      const existingRiskConfig = (bot?.riskConfig as Record<string, unknown>) ?? {};
+
+      await prisma.bot.update({
+        where: { id: botId },
+        data: {
+          riskConfig: {
+            ...existingRiskConfig,
+            paperState: {
+              balance: state,
+              positions: positions ? Array.from(positions.entries()) : [],
+              savedAt: new Date().toISOString(),
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      logger.info('Paper state saved', { botId, balance: state });
+    } catch (err) {
+      logger.error('Failed to save paper state', { botId, error: String(err) });
+    }
+  }
+
+  /**
+   * Paper 모드 상태를 DB에서 복원 (봇 시작 시 호출)
+   */
+  private restorePaperState(bot: { id: string; riskConfig: unknown }): void {
+    const riskConfig = bot.riskConfig as Record<string, unknown> | null;
+    const paperState = riskConfig?.paperState as {
+      balance?: Record<string, number>;
+      positions?: [string, TrackedPosition][];
+      savedAt?: string;
+    } | undefined;
+
+    if (paperState?.balance) {
+      this.paperBalances.set(bot.id, paperState.balance);
+      logger.info('Paper balance restored', { botId: bot.id, balance: paperState.balance, savedAt: paperState.savedAt });
+    } else {
+      this.paperBalances.set(bot.id, { USDT: 10000 });
+    }
+
+    if (paperState?.positions?.length) {
+      const positionsMap = new Map<string, TrackedPosition>(paperState.positions);
+      this.paperPositions.set(bot.id, positionsMap);
+
+      // 내부 positions 맵에도 복원
+      for (const [key, position] of positionsMap) {
+        if (position.isOpen) {
+          this.positions.set(key, position);
+        }
+      }
+
+      logger.info('Paper positions restored', { botId: bot.id, positionCount: paperState.positions.length });
+    }
+  }
+
+  /**
    * 봇 트레이딩 루프 시작
    */
   async startBotLoop(
@@ -318,7 +390,18 @@ class BotRunnerService {
     const exchangeName = exchangeService.getExchangeNameFromEnum(exchangeEnum);
 
     if (mode === 'PAPER') {
-      exchangeService.initPaperExchange(exchangeName, 10000);
+      // DB에서 이전 Paper 상태 복원 시도
+      const botRecord = await prisma.bot.findUnique({
+        where: { id: botId },
+        select: { id: true, riskConfig: true },
+      });
+      if (botRecord) {
+        this.restorePaperState(botRecord);
+      }
+
+      const restoredBalance = this.paperBalances.get(botId);
+      const initialBalance = restoredBalance?.USDT ?? 10000;
+      exchangeService.initPaperExchange(exchangeName, initialBalance);
     }
 
     // API 키를 시작 시 한 번만 조회하여 캐싱
@@ -411,41 +494,40 @@ class BotRunnerService {
           }
         }
 
-        // ===== 리스크 관리 체크 =====
-        if (mode === 'REAL') {
-          // 서킷 브레이커 확인
-          const cbCheck = await riskManager.checkCircuitBreaker(botId);
-          if (cbCheck.triggered) {
-            logger.warn('Circuit breaker active, skipping trade', {
+        // ===== 리스크 관리 체크 (PAPER + REAL 모드 공통) =====
+        // 서킷 브레이커 확인
+        const cbCheck = await riskManager.checkCircuitBreaker(botId);
+        if (cbCheck.triggered) {
+          logger.warn('Circuit breaker active, skipping trade', {
+            botId,
+            mode,
+            consecutiveLosses: cbCheck.consecutiveLosses,
+            cooldownRemainingMs: cbCheck.cooldownRemainingMs,
+          });
+          await prisma.botLog.create({
+            data: {
               botId,
-              consecutiveLosses: cbCheck.consecutiveLosses,
-              cooldownRemainingMs: cbCheck.cooldownRemainingMs,
-            });
-            await prisma.botLog.create({
-              data: {
-                botId,
-                level: 'WARN',
-                message: `서킷 브레이커 발동: 연속 ${cbCheck.consecutiveLosses}회 손실, ${Math.ceil(cbCheck.cooldownRemainingMs / 60000)}분 대기`,
-              },
-            }).catch(() => {});
-            return;
-          }
+              level: 'WARN',
+              message: `서킷 브레이커 발동: 연속 ${cbCheck.consecutiveLosses}회 손실, ${Math.ceil(cbCheck.cooldownRemainingMs / 60000)}분 대기`,
+            },
+          }).catch(() => {});
+          return;
+        }
 
-          // 일일/주간 손실 한도 확인
-          const riskCheck = await riskManager.checkRiskLimits(botId);
-          if (!riskCheck.allowed) {
-            logger.warn('Risk limit reached, skipping trade', {
-              botId, reason: riskCheck.reason,
-            });
-            await prisma.botLog.create({
-              data: {
-                botId,
-                level: 'WARN',
-                message: `리스크 한도 초과: ${riskCheck.reason}`,
-              },
-            }).catch(() => {});
-            return;
-          }
+        // 일일/주간 손실 한도 확인
+        const riskCheck = await riskManager.checkRiskLimits(botId);
+        if (!riskCheck.allowed) {
+          logger.warn('Risk limit reached, skipping trade', {
+            botId, mode, reason: riskCheck.reason,
+          });
+          await prisma.botLog.create({
+            data: {
+              botId,
+              level: 'WARN',
+              message: `리스크 한도 초과: ${riskCheck.reason}`,
+            },
+          }).catch(() => {});
+          return;
         }
 
         // ===== 포지션 컨텍스트를 포함하여 전략 분석 =====
@@ -635,6 +717,16 @@ class BotRunnerService {
 
       const updatedBalance = paper.getBalance();
       const paperUsdtBalance = updatedBalance['USDT']?.total ?? 0;
+
+      // Paper 상태 추적 업데이트 (영속화용)
+      this.paperBalances.set(botId, { USDT: paperUsdtBalance });
+      const currentPositions = new Map<string, TrackedPosition>();
+      for (const [key, pos] of this.positions) {
+        if (key.startsWith(`${botId}:`)) {
+          currentPositions.set(key, pos);
+        }
+      }
+      this.paperPositions.set(botId, currentPositions);
 
       this.logPaperSignal({
         botId,
@@ -858,7 +950,7 @@ class BotRunnerService {
   /**
    * 봇 트레이딩 루프 중지
    */
-  stopBotLoop(botId: string): void {
+  async stopBotLoop(botId: string): Promise<void> {
     const control = this.activeBots.get(botId);
     if (control) {
       control.stopped = true;
@@ -867,6 +959,15 @@ class BotRunnerService {
         clearTimeout(control.timerId);
         control.timerId = undefined;
       }
+
+      // Paper 모드 상태 저장
+      await this.savePaperState(botId).catch((err) => {
+        logger.error('Failed to save paper state on stop', { botId, error: String(err) });
+      });
+
+      // Paper 상태 메모리 정리
+      this.paperBalances.delete(botId);
+      this.paperPositions.delete(botId);
       this.activeBots.delete(botId);
     }
   }
@@ -874,8 +975,10 @@ class BotRunnerService {
   /**
    * 모든 활성 봇 중지 (서버 종료 시 graceful shutdown)
    */
-  stopAllBots(): void {
+  async stopAllBots(): Promise<void> {
     const count = this.activeBots.size;
+    const savePromises: Promise<void>[] = [];
+
     for (const [botId, control] of this.activeBots) {
       control.stopped = true;
       control.running = false;
@@ -883,9 +986,21 @@ class BotRunnerService {
         clearTimeout(control.timerId);
         control.timerId = undefined;
       }
+      // Paper 모드 상태 저장
+      savePromises.push(
+        this.savePaperState(botId).catch((err) => {
+          logger.error('Failed to save paper state during shutdown', { botId, error: String(err) });
+        })
+      );
       logger.info('Bot stopped during shutdown', { botId });
     }
+
+    // 모든 Paper 상태 저장 완료 대기
+    await Promise.all(savePromises);
+
     this.activeBots.clear();
+    this.paperBalances.clear();
+    this.paperPositions.clear();
     if (count > 0) {
       logger.info(`Stopped ${count} active bot(s) during shutdown`);
     }

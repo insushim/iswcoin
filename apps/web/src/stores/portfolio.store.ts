@@ -55,7 +55,8 @@ export const usePortfolioStore = create<PortfolioState>((set) => ({
   fetchHistory: async (days: number = 30) => {
     try {
       const res = await api.get(endpoints.portfolio.history, { params: { days } });
-      const data = res.data.data ?? res.data;
+      const raw = res.data.data ?? res.data;
+      const data = raw.history ?? raw.data ?? raw;
       set({ history: Array.isArray(data) ? data : [] });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to fetch history";

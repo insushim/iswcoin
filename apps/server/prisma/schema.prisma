@@ -86,6 +86,7 @@ model User {
   portfolios     Portfolio[]
   alerts         Alert[]
   backtestResults BacktestResult[]
+  settings       UserSettings?
 
   @@map("users")
 }
@@ -217,4 +218,26 @@ model BotLog {
 
   @@index([botId, createdAt])
   @@map("bot_logs")
+}
+
+model UserSettings {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Telegram
+  telegramEnabled  Boolean @default(false)
+  telegramChatId   String?
+  telegramBotToken String?
+
+  // Notifications
+  notifyOnTrade    Boolean @default(true)
+  notifyOnStop     Boolean @default(true)
+  notifyOnError    Boolean @default(true)
+  notifyOnDaily    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_settings")
 }

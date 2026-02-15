@@ -61,7 +61,7 @@ export default function SettingsPage() {
   const [notifyDailyReport, setNotifyDailyReport] = useState(true);
   const [notifyRegimeChange, setNotifyRegimeChange] = useState(false);
 
-  // Load API keys and settings from server
+  // Load API keys from server
   const loadSettings = useCallback(async () => {
     try {
       const res = await api.get(endpoints.settings.apiKeys);
@@ -81,9 +81,28 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // Load saved notification settings
+  const loadNotificationSettings = useCallback(async () => {
+    try {
+      const res = await endpoints.settings.getNotifications();
+      const data = res.data.data ?? res.data;
+      if (data) {
+        if (typeof data.telegramEnabled === "boolean") setTelegramEnabled(data.telegramEnabled);
+        if (data.telegramChatId) setTelegramChatId(data.telegramChatId);
+        if (typeof data.notifyTrades === "boolean") setNotifyTrades(data.notifyTrades);
+        if (typeof data.notifyAlerts === "boolean") setNotifyAlerts(data.notifyAlerts);
+        if (typeof data.notifyDailyReport === "boolean") setNotifyDailyReport(data.notifyDailyReport);
+        if (typeof data.notifyRegimeChange === "boolean") setNotifyRegimeChange(data.notifyRegimeChange);
+      }
+    } catch {
+      // Ignore - use defaults
+    }
+  }, []);
+
   useEffect(() => {
     loadSettings();
-  }, [loadSettings]);
+    loadNotificationSettings();
+  }, [loadSettings, loadNotificationSettings]);
 
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

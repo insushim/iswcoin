@@ -23,9 +23,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // 프로덕션에서 에러 로깅 (Sentry 등)
+    // 항상 에러 로깅
+    console.error("ErrorBoundary caught:", error, errorInfo);
+    // 프로덕션에서 외부 에러 리포팅 (Sentry 등)
     if (process.env.NODE_ENV === "production") {
-      console.error("ErrorBoundary caught:", error, errorInfo);
+      // TODO: Sentry.captureException(error, { extra: errorInfo });
     }
   }
 

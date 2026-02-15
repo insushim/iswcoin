@@ -218,6 +218,46 @@ const notificationsSchema = z.object({
   notifyRegimeChange: z.boolean().optional(),
 });
 
+// GET /notifications - 알림 설정 조회
+router.get('/notifications', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+
+    const settings = await prisma.userSettings.findUnique({
+      where: { userId },
+    });
+
+    if (!settings) {
+      // 설정이 없으면 기본값 반환
+      res.json({
+        data: {
+          telegramEnabled: false,
+          telegramChatId: null,
+          notifyOnTrade: true,
+          notifyOnStop: true,
+          notifyOnError: true,
+          notifyOnDaily: false,
+        },
+      });
+      return;
+    }
+
+    res.json({
+      data: {
+        telegramEnabled: settings.telegramEnabled,
+        telegramChatId: settings.telegramChatId,
+        notifyOnTrade: settings.notifyOnTrade,
+        notifyOnStop: settings.notifyOnStop,
+        notifyOnError: settings.notifyOnError,
+        notifyOnDaily: settings.notifyOnDaily,
+      },
+    });
+  } catch (err) {
+    logger.error('Failed to fetch notification settings', { error: String(err) });
+    res.status(500).json({ error: 'Failed to fetch notification settings' });
+  }
+});
+
 // PUT /notifications - 알림 설정 저장
 router.put('/notifications', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -227,9 +267,42 @@ router.put('/notifications', async (req: AuthenticatedRequest, res: Response): P
       return;
     }
 
-    // 알림 설정은 User 모델에 별도 컬럼이 없으므로, 향후 DB 마이그레이션 전까지 성공 응답만 반환
-    logger.info('Notification settings updated', { userId: req.user!.userId, settings: validation.data });
-    res.json({ success: true });
+    const userId = req.user!.userId;
+    const data = validation.data;
+
+    const settings = await prisma.userSettings.upsert({
+      where: { userId },
+      update: {
+        ...(data.telegramEnabled !== undefined ? { telegramEnabled: data.telegramEnabled } : {}),
+        ...(data.telegramChatId !== undefined ? { telegramChatId: data.telegramChatId } : {}),
+        ...(data.notifyTrades !== undefined ? { notifyOnTrade: data.notifyTrades } : {}),
+        ...(data.notifyAlerts !== undefined ? { notifyOnStop: data.notifyAlerts } : {}),
+        ...(data.notifyDailyReport !== undefined ? { notifyOnDaily: data.notifyDailyReport } : {}),
+        ...(data.notifyRegimeChange !== undefined ? { notifyOnError: data.notifyRegimeChange } : {}),
+      },
+      create: {
+        userId,
+        telegramEnabled: data.telegramEnabled ?? false,
+        telegramChatId: data.telegramChatId ?? null,
+        notifyOnTrade: data.notifyTrades ?? true,
+        notifyOnStop: data.notifyAlerts ?? true,
+        notifyOnError: data.notifyRegimeChange ?? true,
+        notifyOnDaily: data.notifyDailyReport ?? false,
+      },
+    });
+
+    logger.info('Notification settings updated', { userId, settings: data });
+    res.json({
+      success: true,
+      data: {
+        telegramEnabled: settings.telegramEnabled,
+        telegramChatId: settings.telegramChatId,
+        notifyOnTrade: settings.notifyOnTrade,
+        notifyOnStop: settings.notifyOnStop,
+        notifyOnError: settings.notifyOnError,
+        notifyOnDaily: settings.notifyOnDaily,
+      },
+    });
   } catch (err) {
     logger.error('Failed to update notifications', { error: String(err) });
     res.status(500).json({ error: 'Failed to update notification settings' });

@@ -58,7 +58,7 @@ function mapBot(raw: Record<string, unknown>): Bot {
     strategy: (raw.strategy as StrategyType) || StrategyType.DCA,
     mode: (raw.mode as TradingMode) || (raw.trading_mode as TradingMode) || TradingMode.PAPER,
     status: (raw.status as BotStatus) || BotStatus.STOPPED,
-    config: typeof raw.config === "string" ? JSON.parse(raw.config || "{}") : (raw.config as Record<string, number | string | boolean>) || {},
+    config: typeof raw.config === "string" ? (() => { try { return JSON.parse(raw.config as string || "{}"); } catch { return {}; } })() : (raw.config as Record<string, number | string | boolean>) || {},
     pnl: Number(raw.pnl ?? raw.total_profit ?? 0),
     pnlPercent: Number(raw.pnlPercent ?? raw.pnl_percent ?? 0),
     totalTrades: Number(raw.totalTrades ?? raw.total_trades ?? 0),

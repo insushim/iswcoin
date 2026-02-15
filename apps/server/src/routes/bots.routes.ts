@@ -124,7 +124,11 @@ router.post('/', async (req: AuthenticatedRequest, res: Response): Promise<void>
 
     logger.info('Bot created', { botId: bot.id, name, strategy });
 
-    res.status(201).json({ bot });
+    const warning = bot.strategy === 'RL_AGENT'
+      ? '⚠️ RL_AGENT 전략은 현재 Momentum 대체 모드로 실행됩니다. 완전한 RL 학습에는 Python 엔진이 필요합니다.'
+      : undefined;
+
+    res.status(201).json({ bot, ...(warning ? { warning } : {}) });
   } catch (err) {
     logger.error('Failed to create bot', { error: String(err) });
     res.status(500).json({ error: 'Failed to create bot' });
@@ -198,7 +202,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response): Promise<
     }
 
     if (bot.status === 'RUNNING') {
-      botRunnerService.stopBotLoop(botId);
+      await botRunnerService.stopBotLoop(botId);
     }
 
     await prisma.bot.delete({ where: { id: botId } });
@@ -264,8 +268,12 @@ router.post('/:id/start', async (req: AuthenticatedRequest, res: Response): Prom
       },
     });
 
+    const warning = bot.strategy === 'RL_AGENT'
+      ? '⚠️ RL_AGENT 전략은 현재 Momentum 대체 모드로 실행됩니다. 완전한 RL 학습에는 Python 엔진이 필요합니다.'
+      : undefined;
+
     logger.info('Bot started', { botId, strategy: bot.strategy, mode: bot.mode });
-    res.json({ message: 'Bot started', status: 'RUNNING' });
+    res.json({ message: 'Bot started', status: 'RUNNING', ...(warning ? { warning } : {}) });
   } catch (err) {
     logger.error('Failed to start bot', { error: String(err) });
     res.status(500).json({ error: 'Failed to start bot' });
@@ -291,7 +299,7 @@ router.post('/:id/stop', async (req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    botRunnerService.stopBotLoop(botId);
+    await botRunnerService.stopBotLoop(botId);
 
     await prisma.bot.update({
       where: { id: botId },
@@ -311,6 +319,92 @@ router.post('/:id/stop', async (req: AuthenticatedRequest, res: Response): Promi
   } catch (err) {
     logger.error('Failed to stop bot', { error: String(err) });
     res.status(500).json({ error: 'Failed to stop bot' });
+  }
+});
+
+// ─── Performance & Trades ───────────────────────────────
+
+router.get('/:id/performance', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const id = req.params['id'];
+
+    const bot = await prisma.bot.findFirst({
+      where: { id, userId },
+    });
+    if (!bot) {
+      res.status(404).json({ error: '봇을 찾을 수 없습니다' });
+      return;
+    }
+
+    const trades = await prisma.trade.findMany({
+      where: { botId: id },
+      orderBy: { timestamp: 'asc' },
+    });
+
+    const totalTrades = trades.length;
+    const wins = trades.filter((t) => (t.pnl ?? 0) > 0).length;
+    const losses = trades.filter((t) => (t.pnl ?? 0) < 0).length;
+    const totalPnl = trades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+    const totalFees = trades.reduce((sum, t) => sum + (t.fee ?? 0), 0);
+    const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+
+    // Max drawdown calculation
+    let peak = 0;
+    let maxDrawdown = 0;
+    let cumPnl = 0;
+    for (const t of trades) {
+      cumPnl += t.pnl ?? 0;
+      if (cumPnl > peak) peak = cumPnl;
+      const dd = peak - cumPnl;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+
+    res.json({
+      totalTrades,
+      wins,
+      losses,
+      totalPnl,
+      totalFees,
+      winRate,
+      maxDrawdown,
+      netPnl: totalPnl - totalFees,
+    });
+  } catch (err) {
+    logger.error('Failed to fetch bot performance', { error: String(err) });
+    res.status(500).json({ error: 'Failed to fetch bot performance' });
+  }
+});
+
+router.get('/:id/trades', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const id = req.params['id'];
+    const page = parseInt(req.query['page'] as string) || 1;
+    const limit = Math.min(parseInt(req.query['limit'] as string) || 20, 100);
+
+    const bot = await prisma.bot.findFirst({
+      where: { id, userId },
+    });
+    if (!bot) {
+      res.status(404).json({ error: '봇을 찾을 수 없습니다' });
+      return;
+    }
+
+    const [trades, total] = await Promise.all([
+      prisma.trade.findMany({
+        where: { botId: id },
+        orderBy: { timestamp: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.trade.count({ where: { botId: id } }),
+    ]);
+
+    res.json({ trades, total, page, limit });
+  } catch (err) {
+    logger.error('Failed to fetch bot trades', { error: String(err) });
+    res.status(500).json({ error: 'Failed to fetch bot trades' });
   }
 });
 

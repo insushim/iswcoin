@@ -87,8 +87,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const res = await api.get(endpoints.auth.me);
       const data = res.data.data ?? res.data;
       set({ user: data.user ?? data });
-    } catch {
-      get().logout();
+    } catch (err: unknown) {
+      // 네트워크 오류(응답 없음)는 현재 상태 유지 - 일시적 연결 문제
+      const axiosErr = err as { response?: { status?: number } };
+      if (!axiosErr.response) {
+        return;
+      }
+      // 401/403은 api.ts 인터셉터가 처리하므로 여기서는 로그아웃하지 않음
+      if (axiosErr.response.status === 401 || axiosErr.response.status === 403) {
+        return;
+      }
+      // 기타 서버 오류도 현재 상태 유지
     }
   },
 

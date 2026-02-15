@@ -59,7 +59,8 @@ export default function TradesPage() {
     try {
       const res = await api.get(endpoints.trades.list, { params: { limit: 100 } });
       const raw = res.data.data ?? res.data;
-      const list = Array.isArray(raw) ? raw.map(mapTrade) : [];
+      const tradeData = raw.trades ?? raw.data ?? raw;
+      const list = Array.isArray(tradeData) ? tradeData.map(mapTrade) : [];
       setTrades(list);
     } catch {
       setTrades([]);

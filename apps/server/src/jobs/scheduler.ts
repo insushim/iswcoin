@@ -82,7 +82,7 @@ export function startScheduler(): void {
           logger.warn('Risk limit breached', { botId: bot.id, reason: riskCheck.reason });
 
           // 봇 루프 실제로 중지 + DB 상태 업데이트
-          botRunnerService.stopBotLoop(bot.id);
+          await botRunnerService.stopBotLoop(bot.id);
           await prisma.bot.update({
             where: { id: bot.id },
             data: { status: 'STOPPED' },

@@ -89,6 +89,8 @@ export const endpoints = {
     delete: (id: string) => `/bots/${id}`,
     start: (id: string) => `/bots/${id}/start`,
     stop: (id: string) => `/bots/${id}/stop`,
+    performance: (id: string) => `/bots/${id}/performance`,
+    trades: (id: string, page = 1, limit = 20) => `/bots/${id}/trades?page=${page}&limit=${limit}`,
   },
   trades: {
     list: "/trades",
@@ -118,6 +120,7 @@ export const endpoints = {
   settings: {
     apiKeys: "/settings/api-keys",
     notifications: "/settings/notifications",
+    getNotifications: () => api.get("/settings/notifications"),
     profile: "/settings/profile",
   },
 } as const;

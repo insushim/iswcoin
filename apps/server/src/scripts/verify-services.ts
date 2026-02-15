@@ -1022,7 +1022,7 @@ async function main() {
   await runTest('BotRunnerService: stopBotLoop (없는 봇)', async () => {
     const svc = BotRunnerServiceMod.botRunnerService;
     // Should not throw even for non-existent bot
-    svc.stopBotLoop('non-existent-bot');
+    await svc.stopBotLoop('non-existent-bot');
   });
 
   await runTest('BotRunnerService: getBotPosition (없는 포지션)', async () => {
@@ -1043,7 +1043,7 @@ async function main() {
 
   await runTest('BotRunnerService: stopAllBots', async () => {
     const svc = BotRunnerServiceMod.botRunnerService;
-    svc.stopAllBots();
+    await svc.stopAllBots();
     const count = svc.getActiveBotCount();
     if (count !== 0) throw new Error(`Expected 0 active bots, got ${count}`);
   });

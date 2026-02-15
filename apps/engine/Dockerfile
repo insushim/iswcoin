@@ -1,5 +1,5 @@
 # ---- Build stage (install deps) ----
-FROM python:3.11-slim AS builder
+FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
@@ -13,12 +13,12 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # ---- Runtime stage ----
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
 # Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy source code
