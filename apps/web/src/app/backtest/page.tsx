@@ -77,10 +77,18 @@ export default function BacktestPage() {
     }
 
     try {
-      const numericParams: Record<string, number> = {};
+      // 숫자 파라미터 + 앙상블용 strategies/weights 전달
+      const params: Record<string, unknown> = {};
       Object.entries(config).forEach(([k, v]) => {
-        if (typeof v === "number") numericParams[k] = v;
+        if (typeof v === "number") params[k] = v;
       });
+      // ENSEMBLE: strategies 배열과 weights 객체 전달
+      if (strategy === StrategyType.ENSEMBLE) {
+        const strategies = (config as Record<string, unknown>).strategies;
+        const weights = (config as Record<string, unknown>).weights;
+        if (Array.isArray(strategies)) params.strategies = strategies;
+        if (weights && typeof weights === "object") params.weights = weights;
+      }
 
       const res = await api.post(endpoints.backtest.run, {
         symbol,
@@ -88,7 +96,7 @@ export default function BacktestPage() {
         startDate,
         endDate,
         initialCapital: capital,
-        params: numericParams,
+        params,
       });
       if (res.data.error) {
         setError(res.data.error);

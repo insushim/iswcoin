@@ -704,10 +704,10 @@ class BotRunnerService {
             return;
           }
 
-          // 이미 포지션이 있을 때 같은 방향 매수 방지 (DCA 제외)
+          // 이미 포지션이 있을 때 같은 방향 매수 방지 (DCA/MARTINGALE/ENSEMBLE 제외)
           if (signal.action === 'buy' && currentPosition && currentPosition.isOpen) {
-            if (strategyType !== 'DCA' && strategyType !== 'MARTINGALE') {
-              logger.debug('Buy signal with existing position, skipping (non-DCA)', { botId });
+            if (strategyType !== 'DCA' && strategyType !== 'MARTINGALE' && strategyType !== 'ENSEMBLE') {
+              logger.debug('Buy signal with existing position, skipping (non-DCA/ENSEMBLE)', { botId });
               return;
             }
           }

@@ -8,6 +8,7 @@ import { MartingaleStrategy } from './martingale.strategy.js';
 import { StatArbStrategy } from './stat-arb.strategy.js';
 import { ScalpingStrategy } from './scalping.strategy.js';
 import { FundingArbStrategy } from './funding-arb.strategy.js';
+import { EnsembleStrategy } from './ensemble.strategy.js';
 
 export { BaseStrategy } from './base.strategy.js';
 export type { TradeSignal, TradeAction } from './base.strategy.js';
@@ -20,6 +21,7 @@ export { MartingaleStrategy } from './martingale.strategy.js';
 export { StatArbStrategy } from './stat-arb.strategy.js';
 export { ScalpingStrategy } from './scalping.strategy.js';
 export { FundingArbStrategy } from './funding-arb.strategy.js';
+export { EnsembleStrategy } from './ensemble.strategy.js';
 
 export type StrategyType =
   | 'DCA'
@@ -60,8 +62,7 @@ export function getStrategy(
     case 'FUNDING_ARB':
       return new FundingArbStrategy(config);
     case 'ENSEMBLE':
-      // 앙상블은 내부적으로 여러 전략을 조합 - 기본값은 Momentum 사용
-      return new MomentumStrategy(config);
+      return new EnsembleStrategy(config);
     default: {
       const _exhaustive: never = type;
       throw new Error(`Unknown strategy type: ${String(_exhaustive)}`);

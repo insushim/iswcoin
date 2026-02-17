@@ -5,7 +5,7 @@ type RegimeEnv = { Bindings: Env; Variables: AppVariables };
 
 export const regimeRoutes = new Hono<RegimeEnv>();
 
-const COINGECKO_BASE = 'https://api.coingecko.com/api/v3';
+const BYBIT_BASE = 'https://api.bybit.com/v5/market';
 
 type MarketRegime = 'BULL_HIGH_VOL' | 'BULL_LOW_VOL' | 'BEAR_HIGH_VOL' | 'BEAR_LOW_VOL';
 
@@ -16,136 +16,146 @@ const REGIME_STRATEGIES: Record<MarketRegime, string[]> = {
   BEAR_LOW_VOL: ['DCA', 'GRID', 'FUNDING_ARB'],
 };
 
-function determineRegime(
-  priceChange7d: number,
-  priceChange30d: number,
-  volatility: number,
-  fearGreedIndex: number
-): { regime: MarketRegime; confidence: number } {
-  // Determine trend direction
-  const isBull = priceChange30d > 0 && (priceChange7d > -5 || fearGreedIndex > 45);
-
-  // Determine volatility level
-  // High volatility: > 3% daily swings or high dispersion
-  const isHighVol = volatility > 3.0;
-
-  let regime: MarketRegime;
-  if (isBull && isHighVol) regime = 'BULL_HIGH_VOL';
-  else if (isBull && !isHighVol) regime = 'BULL_LOW_VOL';
-  else if (!isBull && isHighVol) regime = 'BEAR_HIGH_VOL';
-  else regime = 'BEAR_LOW_VOL';
-
-  // Confidence based on how clear the signals are
-  const trendStrength = Math.min(100, Math.abs(priceChange30d) * 2);
-  const volClarity = Math.abs(volatility - 3.0) * 10; // Distance from threshold
-  const confidence = Math.min(0.95, Math.max(0.45, (trendStrength + volClarity + Math.abs(fearGreedIndex - 50)) / 200));
-
-  return { regime, confidence: parseFloat(confidence.toFixed(2)) };
+async function cachedFetch(url: string, ttlSeconds: number): Promise<Response> {
+  return fetch(url, { cf: { cacheTtl: ttlSeconds, cacheEverything: true } } as RequestInit);
 }
 
-// GET /current - Current market regime
+// Bybit v5 kline response type
+interface BybitKlineResponse {
+  retCode: number;
+  retMsg: string;
+  result: {
+    list: string[][]; // [startTime, open, high, low, close, volume, turnover]
+  };
+}
+
+// Bybit returns klines in REVERSE chronological order (newest first), so we must reverse
+function parseBybitKlines(data: BybitKlineResponse): string[][] {
+  if (data.retCode !== 0 || !data.result?.list) {
+    throw new Error(`Bybit API error: ${data.retMsg}`);
+  }
+  // Reverse to get chronological order (oldest first)
+  return [...data.result.list].reverse();
+}
+
+function classifyRegime(prices: number[], windowSize: number = 7): MarketRegime {
+  if (prices.length < windowSize + 1) return 'BULL_LOW_VOL';
+  const current = prices[prices.length - 1];
+  const past = prices[Math.max(0, prices.length - 1 - windowSize)];
+  const change = ((current - past) / past) * 100;
+
+  // 변동성: 일간 수익률 표준편차
+  const returns: number[] = [];
+  const start = Math.max(0, prices.length - windowSize);
+  for (let i = start + 1; i < prices.length; i++) {
+    returns.push(Math.abs(((prices[i] - prices[i - 1]) / prices[i - 1]) * 100));
+  }
+  const avgVol = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+
+  const isBull = change > 0;
+  const isHighVol = avgVol > 2.0;
+
+  if (isBull && isHighVol) return 'BULL_HIGH_VOL';
+  if (isBull && !isHighVol) return 'BULL_LOW_VOL';
+  if (!isBull && isHighVol) return 'BEAR_HIGH_VOL';
+  return 'BEAR_LOW_VOL';
+}
+
+// GET /current - 현재 시장 국면 (Bybit BTC 데이터 기반)
 regimeRoutes.get('/current', async (c) => {
   try {
-    // Fetch Bitcoin market data for regime detection
-    const [marketRes, fngRes] = await Promise.all([
-      fetch(`${COINGECKO_BASE}/coins/bitcoin/market_chart?vs_currency=usd&days=60&interval=daily`),
-      fetch('https://api.alternative.me/fng/?limit=1'),
+    // Bybit BTC 90일 일봉 + Fear & Greed 동시 호출
+    const [klineRes, fngRes] = await Promise.all([
+      cachedFetch(`${BYBIT_BASE}/kline?category=spot&symbol=BTCUSDT&interval=D&limit=90`, 60),
+      cachedFetch('https://api.alternative.me/fng/?limit=1', 300),
     ]);
 
-    const marketData = await marketRes.json() as { prices?: number[][] };
+    const klineRaw = await klineRes.json() as BybitKlineResponse;
     const fngData = await fngRes.json() as { data?: Array<{ value: string }> };
 
-    const prices = (marketData.prices || []).map((p) => p[1]);
+    const klineData = parseBybitKlines(klineRaw);
+
+    if (klineData.length < 30) {
+      throw new Error('Insufficient data');
+    }
+
+    // Bybit kline format: [startTime, open, high, low, close, volume, turnover]
+    const closes = klineData.map((k) => parseFloat(k[4]));
+    const highs = klineData.map((k) => parseFloat(k[2]));
+    const lows = klineData.map((k) => parseFloat(k[3]));
     const fearGreedIndex = parseInt(fngData.data?.[0]?.value || '50');
 
-    if (prices.length < 30) {
-      throw new Error('Insufficient price data');
-    }
+    const currentPrice = closes[closes.length - 1];
+    const price7d = closes[Math.max(0, closes.length - 8)];
+    const price30d = closes[Math.max(0, closes.length - 31)];
+    const priceChange7d = ((currentPrice - price7d) / price7d) * 100;
+    const priceChange30d = ((currentPrice - price30d) / price30d) * 100;
 
-    // Calculate price changes
-    const currentPrice = prices[prices.length - 1];
-    const price7dAgo = prices[Math.max(0, prices.length - 8)];
-    const price30dAgo = prices[Math.max(0, prices.length - 31)];
-
-    const priceChange7d = ((currentPrice - price7dAgo) / price7dAgo) * 100;
-    const priceChange30d = ((currentPrice - price30dAgo) / price30dAgo) * 100;
-
-    // Calculate volatility (daily returns std dev)
+    // 변동성 (일간 수익률 표준편차)
     const dailyReturns: number[] = [];
-    for (let i = 1; i < prices.length; i++) {
-      dailyReturns.push(((prices[i] - prices[i - 1]) / prices[i - 1]) * 100);
+    for (let i = 1; i < closes.length; i++) {
+      dailyReturns.push(((closes[i] - closes[i - 1]) / closes[i - 1]) * 100);
     }
     const avgReturn = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;
-    const variance = dailyReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / dailyReturns.length;
+    const variance = dailyReturns.reduce((s, r) => s + (r - avgReturn) ** 2, 0) / dailyReturns.length;
     const volatility = Math.sqrt(variance);
 
-    // Calculate indicators
-    // ADX approximation (based on directional movement)
-    const recentReturns = dailyReturns.slice(-14);
-    const positiveDM = recentReturns.filter((r) => r > 0).reduce((a, b) => a + b, 0);
-    const negativeDM = Math.abs(recentReturns.filter((r) => r < 0).reduce((a, b) => a + b, 0));
-    const adx = parseFloat(((Math.abs(positiveDM - negativeDM) / (positiveDM + negativeDM + 0.001)) * 100).toFixed(1));
+    // ADX 근사
+    const recent14 = dailyReturns.slice(-14);
+    const posDM = recent14.filter((r) => r > 0).reduce((a, b) => a + b, 0);
+    const negDM = Math.abs(recent14.filter((r) => r < 0).reduce((a, b) => a + b, 0));
+    const adx = parseFloat(((Math.abs(posDM - negDM) / (posDM + negDM + 0.001)) * 100).toFixed(1));
 
-    // ATR (Average True Range)
-    const atrValues: number[] = [];
-    for (let i = Math.max(1, prices.length - 14); i < prices.length; i++) {
-      atrValues.push(Math.abs(prices[i] - prices[i - 1]));
+    // ATR (True Range)
+    const atrVals: number[] = [];
+    for (let i = Math.max(1, closes.length - 14); i < closes.length; i++) {
+      const tr = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+      atrVals.push(tr);
     }
-    const atr = atrValues.length > 0
-      ? parseFloat((atrValues.reduce((a, b) => a + b, 0) / atrValues.length).toFixed(2))
-      : 0;
+    const atr = atrVals.length > 0 ? parseFloat((atrVals.reduce((a, b) => a + b, 0) / atrVals.length).toFixed(2)) : 0;
 
-    // Bollinger Band Width
-    const bbPeriod = Math.min(20, prices.length);
-    const recentPrices = prices.slice(-bbPeriod);
-    const bbMiddle = recentPrices.reduce((a, b) => a + b, 0) / bbPeriod;
-    const bbStdDev = Math.sqrt(recentPrices.reduce((sum, p) => sum + Math.pow(p - bbMiddle, 2), 0) / bbPeriod);
-    const bbWidth = parseFloat(((4 * bbStdDev / bbMiddle) * 100).toFixed(2));
+    // BB Width
+    const bbP = Math.min(20, closes.length);
+    const bbSlice = closes.slice(-bbP);
+    const bbMid = bbSlice.reduce((a, b) => a + b, 0) / bbP;
+    const bbStd = Math.sqrt(bbSlice.reduce((s, p) => s + (p - bbMid) ** 2, 0) / bbP);
+    const bbWidth = parseFloat(((4 * bbStd / bbMid) * 100).toFixed(2));
 
-    const { regime, confidence } = determineRegime(priceChange7d, priceChange30d, volatility, fearGreedIndex);
+    // 레짐 판정
+    const isBull = priceChange30d > 0 && (priceChange7d > -5 || fearGreedIndex > 45);
+    const isHighVol = volatility > 3.0;
 
-    // Generate 60-day regime history
+    let regime: MarketRegime;
+    if (isBull && isHighVol) regime = 'BULL_HIGH_VOL';
+    else if (isBull && !isHighVol) regime = 'BULL_LOW_VOL';
+    else if (!isBull && isHighVol) regime = 'BEAR_HIGH_VOL';
+    else regime = 'BEAR_LOW_VOL';
+
+    // 신뢰도
+    const trendStrength = Math.min(100, Math.abs(priceChange30d) * 2);
+    const volClarity = Math.abs(volatility - 3.0) * 10;
+    const confidence = Math.min(0.95, Math.max(0.45, (trendStrength + volClarity + Math.abs(fearGreedIndex - 50)) / 200));
+
+    // 60일 국면 히스토리
     const history: { date: string; regime: MarketRegime }[] = [];
     const now = new Date();
     for (let i = 59; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 86400000);
-      const idx = Math.max(0, prices.length - 1 - i);
-      const prevIdx = Math.max(0, idx - 7);
-
-      const localChange = idx > 0 ? ((prices[idx] - prices[prevIdx]) / prices[prevIdx]) * 100 : 0;
-
-      // Estimate local volatility
-      const localStart = Math.max(0, idx - 7);
-      const localReturns: number[] = [];
-      for (let j = localStart + 1; j <= idx && j < prices.length; j++) {
-        localReturns.push(Math.abs(((prices[j] - prices[j - 1]) / prices[j - 1]) * 100));
-      }
-      const localVol = localReturns.length > 0
-        ? localReturns.reduce((a, b) => a + b, 0) / localReturns.length
-        : volatility;
-
-      const isBullLocal = localChange > 0;
-      const isHighVolLocal = localVol > 2.0;
-
-      let localRegime: MarketRegime;
-      if (isBullLocal && isHighVolLocal) localRegime = 'BULL_HIGH_VOL';
-      else if (isBullLocal && !isHighVolLocal) localRegime = 'BULL_LOW_VOL';
-      else if (!isBullLocal && isHighVolLocal) localRegime = 'BEAR_HIGH_VOL';
-      else localRegime = 'BEAR_LOW_VOL';
-
-      history.push({ date: date.toISOString(), regime: localRegime });
+      const idx = Math.max(0, closes.length - 1 - i);
+      history.push({
+        date: date.toISOString(),
+        regime: classifyRegime(closes.slice(0, idx + 1)),
+      });
     }
 
     return c.json({
       data: {
         current: regime,
-        probability: confidence,
+        probability: parseFloat(confidence.toFixed(2)),
         regime,
-        confidence,
+        confidence: parseFloat(confidence.toFixed(2)),
         indicators: {
-          adx,
-          atr,
-          bbWidth,
+          adx, atr, bbWidth,
           volatility: parseFloat(volatility.toFixed(2)),
           fearGreedIndex,
           priceChange7d: parseFloat(priceChange7d.toFixed(2)),
@@ -155,93 +165,33 @@ regimeRoutes.get('/current', async (c) => {
         history,
       },
     });
-  } catch {
-    // Fallback with sensible defaults
-    const regimes: MarketRegime[] = ['BULL_HIGH_VOL', 'BULL_LOW_VOL', 'BEAR_HIGH_VOL', 'BEAR_LOW_VOL'];
-    const fallbackRegime: MarketRegime = 'BULL_HIGH_VOL';
-
-    const history: { date: string; regime: MarketRegime }[] = [];
-    const now = new Date();
-    for (let i = 59; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * 86400000);
-      const idx = Math.floor(i / 15) % regimes.length;
-      history.push({ date: date.toISOString(), regime: regimes[idx] });
-    }
-
-    return c.json({
-      data: {
-        current: fallbackRegime,
-        probability: 0.72,
-        regime: fallbackRegime,
-        confidence: 0.72,
-        indicators: {
-          adx: 28.5,
-          atr: 1500,
-          bbWidth: 8.2,
-          volatility: 3.5,
-          fearGreedIndex: 55,
-          priceChange7d: 2.5,
-          priceChange30d: 8.3,
-        },
-        recommendedStrategies: REGIME_STRATEGIES[fallbackRegime],
-        history,
-      },
-    });
+  } catch (err) {
+    console.error('Regime error:', err);
+    return c.json({ error: '시장 국면 데이터를 가져올 수 없습니다.' }, 503);
   }
 });
 
-// GET /history - Regime history
+// GET /history - 국면 히스토리 (90일)
 regimeRoutes.get('/history', async (c) => {
   try {
-    const res = await fetch(`${COINGECKO_BASE}/coins/bitcoin/market_chart?vs_currency=usd&days=90&interval=daily`);
-    const data = await res.json() as { prices?: number[][] };
-    const prices = (data.prices || []).map((p) => p[1]);
+    const res = await cachedFetch(`${BYBIT_BASE}/kline?category=spot&symbol=BTCUSDT&interval=D&limit=100`, 60);
+    const raw = await res.json() as BybitKlineResponse;
+    const klineData = parseBybitKlines(raw);
+    const closes = klineData.map((k) => parseFloat(k[4]));
 
-    const regimes: MarketRegime[] = ['BULL_HIGH_VOL', 'BULL_LOW_VOL', 'BEAR_HIGH_VOL', 'BEAR_LOW_VOL'];
     const history: { date: string; regime: MarketRegime }[] = [];
     const now = new Date();
-
     for (let i = 89; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 86400000);
-      const idx = Math.max(0, prices.length - 1 - i);
-      const prevIdx = Math.max(0, idx - 7);
-
-      if (idx < prices.length && prevIdx < prices.length) {
-        const localChange = ((prices[idx] - prices[prevIdx]) / prices[prevIdx]) * 100;
-
-        const localStart = Math.max(0, idx - 7);
-        const localReturns: number[] = [];
-        for (let j = localStart + 1; j <= idx && j < prices.length; j++) {
-          localReturns.push(Math.abs(((prices[j] - prices[j - 1]) / prices[j - 1]) * 100));
-        }
-        const localVol = localReturns.length > 0
-          ? localReturns.reduce((a, b) => a + b, 0) / localReturns.length
-          : 2.0;
-
-        const isBull = localChange > 0;
-        const isHighVol = localVol > 2.0;
-
-        let regime: MarketRegime;
-        if (isBull && isHighVol) regime = 'BULL_HIGH_VOL';
-        else if (isBull && !isHighVol) regime = 'BULL_LOW_VOL';
-        else if (!isBull && isHighVol) regime = 'BEAR_HIGH_VOL';
-        else regime = 'BEAR_LOW_VOL';
-
-        history.push({ date: date.toISOString(), regime });
-      } else {
-        history.push({ date: date.toISOString(), regime: regimes[Math.floor(i / 20) % 4] });
-      }
+      const idx = Math.max(0, closes.length - 1 - i);
+      history.push({
+        date: date.toISOString(),
+        regime: classifyRegime(closes.slice(0, idx + 1)),
+      });
     }
 
     return c.json({ data: history });
   } catch {
-    const regimes: MarketRegime[] = ['BULL_HIGH_VOL', 'BULL_LOW_VOL', 'BEAR_HIGH_VOL', 'BEAR_LOW_VOL'];
-    const history: { date: string; regime: MarketRegime }[] = [];
-    const now = new Date();
-    for (let i = 89; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * 86400000);
-      history.push({ date: date.toISOString(), regime: regimes[Math.floor(i / 20) % 4] });
-    }
-    return c.json({ data: history });
+    return c.json({ error: '국면 히스토리를 가져올 수 없습니다.' }, 503);
   }
 });

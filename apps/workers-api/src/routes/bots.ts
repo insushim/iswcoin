@@ -327,6 +327,148 @@ botRoutes.delete('/:id', async (c) => {
   return c.json({ data: { success: true } });
 });
 
+// GET /:id/paper/summary - Paper trading summary
+botRoutes.get('/:id/paper/summary', async (c) => {
+  const userId = c.get('userId');
+  const id = c.req.param('id');
+
+  const bot = await c.env.DB.prepare(
+    'SELECT id FROM bots WHERE id = ? AND user_id = ?'
+  ).bind(id, userId).first();
+  if (!bot) return c.json({ error: 'Bot not found' }, 404);
+
+  const { results: trades } = await c.env.DB.prepare(
+    "SELECT * FROM trades WHERE bot_id = ? AND status = 'CLOSED' ORDER BY closed_at ASC"
+  ).bind(id).all();
+
+  const all = (trades || []) as Array<Record<string, unknown>>;
+  const wins = all.filter((t) => ((t.pnl as number) || 0) > 0);
+  const losses = all.filter((t) => ((t.pnl as number) || 0) <= 0);
+  const totalPnl = all.reduce((s, t) => s + ((t.pnl as number) || 0), 0);
+  const totalFees = all.reduce((s, t) => s + ((t.fee as number) || 0), 0);
+  const netPnl = totalPnl - totalFees;
+  const initialBalance = 10000;
+  const balance = initialBalance + netPnl;
+  const totalPnlPct = (totalPnl / initialBalance) * 100;
+
+  const winAmounts = wins.map((t) => (t.pnl as number) || 0);
+  const lossAmounts = losses.map((t) => Math.abs((t.pnl as number) || 0));
+  const avgWin = winAmounts.length > 0 ? winAmounts.reduce((a, b) => a + b, 0) / winAmounts.length : 0;
+  const avgLoss = lossAmounts.length > 0 ? lossAmounts.reduce((a, b) => a + b, 0) / lossAmounts.length : 0;
+  const grossProfit = winAmounts.reduce((a, b) => a + b, 0);
+  const grossLoss = lossAmounts.reduce((a, b) => a + b, 0);
+  const profitFactor = grossLoss > 0 ? parseFloat((grossProfit / grossLoss).toFixed(2)) : grossProfit > 0 ? 999 : 0;
+
+  // Equity curve & max drawdown
+  let equity = initialBalance;
+  let peak = equity;
+  let maxDD = 0;
+  const equityCurve: { date: string; value: number }[] = [{ date: new Date().toISOString(), value: initialBalance }];
+  const dailyPnlMap = new Map<string, number>();
+
+  for (const t of all) {
+    const pnl = (t.pnl as number) || 0;
+    const fee = (t.fee as number) || 0;
+    equity += pnl - fee;
+    if (equity > peak) peak = equity;
+    const dd = peak - equity;
+    if (dd > maxDD) maxDD = dd;
+    const date = ((t.closed_at as string) || '').slice(0, 10);
+    if (date) {
+      equityCurve.push({ date: t.closed_at as string, value: parseFloat(equity.toFixed(2)) });
+      dailyPnlMap.set(date, (dailyPnlMap.get(date) || 0) + pnl - fee);
+    }
+  }
+
+  const dailyPnl = [...dailyPnlMap.entries()].map(([date, pnl]) => ({
+    date, pnl: parseFloat(pnl.toFixed(2)),
+  }));
+
+  // Sharpe ratio (간이 계산)
+  const returns = all.map((t) => ((t.pnl as number) || 0) / initialBalance);
+  const avgRet = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+  const stdRet = returns.length > 1 ? Math.sqrt(returns.reduce((s, r) => s + (r - avgRet) ** 2, 0) / (returns.length - 1)) : 0;
+  const sharpeRatio = stdRet > 0 ? parseFloat((avgRet / stdRet * Math.sqrt(252)).toFixed(2)) : 0;
+
+  return c.json({
+    summary: {
+      balance: parseFloat(balance.toFixed(2)),
+      initialBalance,
+      totalPnl: parseFloat(totalPnl.toFixed(2)),
+      totalPnlPct: parseFloat(totalPnlPct.toFixed(2)),
+      netPnl: parseFloat(netPnl.toFixed(2)),
+      totalTrades: all.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: all.length > 0 ? parseFloat((wins.length / all.length * 100).toFixed(1)) : 0,
+      sharpeRatio,
+      maxDrawdown: parseFloat(maxDD.toFixed(2)),
+      maxDrawdownPct: peak > 0 ? parseFloat((maxDD / peak * 100).toFixed(2)) : 0,
+      profitFactor,
+      avgWin: parseFloat(avgWin.toFixed(2)),
+      avgLoss: parseFloat(avgLoss.toFixed(2)),
+      equityCurve,
+      dailyPnl,
+    },
+  });
+});
+
+// GET /:id/paper/logs - Paper trading logs
+botRoutes.get('/:id/paper/logs', async (c) => {
+  const userId = c.get('userId');
+  const id = c.req.param('id');
+  const limit = Math.min(100, parseInt(c.req.query('limit') || '50'));
+  const offset = parseInt(c.req.query('offset') || '0');
+
+  const bot = await c.env.DB.prepare(
+    'SELECT id, symbol FROM bots WHERE id = ? AND user_id = ?'
+  ).bind(id, userId).first<{ id: string; symbol: string }>();
+  if (!bot) return c.json({ error: 'Bot not found' }, 404);
+
+  const { results: trades } = await c.env.DB.prepare(
+    "SELECT * FROM trades WHERE bot_id = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+  ).bind(id, limit, offset).all();
+
+  const logs = ((trades || []) as Array<Record<string, unknown>>).map((t) => ({
+    timestamp: new Date(t.timestamp as string).getTime(),
+    signal: {
+      action: ((t.side as string) || 'hold').toLowerCase(),
+      confidence: 75,
+      reason: (t.exit_reason as string) || '',
+      price: (t.entry_price as number) || 0,
+    },
+    execution: t.status === 'CLOSED' ? {
+      fillPrice: (t.entry_price as number) || 0,
+      amount: (t.quantity as number) || 0,
+      side: ((t.side as string) || 'buy').toLowerCase() as 'buy' | 'sell',
+      fee: (t.fee as number) || 0,
+    } : null,
+    position: null,
+    paperBalance: 10000 + ((t.pnl as number) || 0),
+  }));
+
+  return c.json({ logs });
+});
+
+// GET /:id/paper/stats - Paper trading stats (alias)
+botRoutes.get('/:id/paper/stats', async (c) => {
+  // Redirect to summary
+  const userId = c.get('userId');
+  const id = c.req.param('id');
+  const bot = await c.env.DB.prepare(
+    'SELECT total_profit, total_trades, win_rate FROM bots WHERE id = ? AND user_id = ?'
+  ).bind(id, userId).first<{ total_profit: number; total_trades: number; win_rate: number }>();
+  if (!bot) return c.json({ error: 'Bot not found' }, 404);
+
+  return c.json({
+    data: {
+      totalProfit: bot.total_profit || 0,
+      totalTrades: bot.total_trades || 0,
+      winRate: bot.win_rate || 0,
+    },
+  });
+});
+
 // GET /:id/performance - Get bot performance
 botRoutes.get('/:id/performance', async (c) => {
   const userId = c.get('userId');

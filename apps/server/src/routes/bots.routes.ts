@@ -1,5 +1,6 @@
 import { Router, type Response } from 'express';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { logger } from '../utils/logger.js';
@@ -14,7 +15,7 @@ const createBotSchema = z.object({
   exchange: z.enum(['BINANCE', 'UPBIT', 'BYBIT', 'BITHUMB']),
   strategy: z.enum(['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB', 'ENSEMBLE']),
   mode: z.enum(['PAPER', 'REAL']).default('PAPER'),
-  config: z.record(z.number()).optional(),
+  config: z.record(z.unknown()).optional(),
   riskConfig: z.record(z.number()).optional(),
 });
 
@@ -108,8 +109,8 @@ router.post('/', async (req: AuthenticatedRequest, res: Response): Promise<void>
         exchange,
         strategy,
         mode,
-        config: mergedConfig,
-        riskConfig: riskConfig ?? {},
+        config: mergedConfig as Prisma.InputJsonValue,
+        riskConfig: (riskConfig ?? {}) as Prisma.InputJsonValue,
       },
     });
 

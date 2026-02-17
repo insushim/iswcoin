@@ -5,18 +5,7 @@
 import type { Env } from './index';
 import { generateId } from './utils';
 
-const CG = 'https://api.coingecko.com/api/v3';
-const COIN_MAP: Record<string, string> = {
-  BTCUSDT: 'bitcoin', ETHUSDT: 'ethereum', SOLUSDT: 'solana',
-  BNBUSDT: 'binancecoin', XRPUSDT: 'ripple', ADAUSDT: 'cardano',
-  DOGEUSDT: 'dogecoin', AVAXUSDT: 'avalanche-2', DOTUSDT: 'polkadot',
-  MATICUSDT: 'matic-network', LINKUSDT: 'chainlink', UNIUSDT: 'uniswap',
-};
-const FALLBACK: Record<string, number> = {
-  BTCUSDT: 97500, ETHUSDT: 3250, SOLUSDT: 198, BNBUSDT: 625,
-  XRPUSDT: 2.45, ADAUSDT: 0.89, DOGEUSDT: 0.32, AVAXUSDT: 38.5,
-  DOTUSDT: 7.89, MATICUSDT: 0.42, LINKUSDT: 19.50, UNIUSDT: 12.30,
-};
+const BYBIT_API = 'https://api.bybit.com';
 
 // Min intervals per strategy (ms)
 const MIN_INTERVAL: Record<string, number> = {
@@ -61,48 +50,35 @@ interface Indicators {
 
 // ============ Price Fetching ============
 
-async function fetchCurrentPrices(symbols: string[], db?: D1Database): Promise<Record<string, number>> {
+async function fetchCurrentPrices(symbols: string[]): Promise<Record<string, number>> {
   const prices: Record<string, number> = {};
-  const ids = symbols.map(s => COIN_MAP[s]).filter(Boolean);
 
-  // Try CoinGecko first
-  if (ids.length > 0) {
-    try {
-      const res = await fetch(`${CG}/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true`,
-        { headers: { Accept: 'application/json', 'User-Agent': 'CryptoSentinel/2.0' } });
-      if (!res.ok) throw new Error(`${res.status}`);
-      const data = await res.json() as Record<string, { usd: number }>;
-      for (const s of symbols) {
-        const cid = COIN_MAP[s];
-        if (cid && data[cid]?.usd) prices[s] = data[cid].usd;
+  // Bybit v5 ticker API (한 번의 호출로 모든 스팟 티커 조회)
+  try {
+    const res = await fetch(`${BYBIT_API}/v5/market/tickers?category=spot`);
+    if (!res.ok) throw new Error(`Bybit API ${res.status}`);
+    const data = await res.json() as { retCode: number; result: { list: Array<{ symbol: string; lastPrice: string }> } };
+    if (data.retCode !== 0) throw new Error(`Bybit retCode ${data.retCode}`);
+    const symbolSet = new Set(symbols);
+    for (const item of data.result.list) {
+      if (symbolSet.has(item.symbol)) {
+        prices[item.symbol] = parseFloat(item.lastPrice);
       }
-    } catch {
-      console.log('[Engine] CoinGecko API 실패, DB 캐시 사용 시도');
     }
-  }
-
-  // For symbols without prices, try last trade price from DB
-  const missing = symbols.filter(s => !prices[s]);
-  if (missing.length > 0 && db) {
-    for (const s of missing) {
+  } catch (err) {
+    console.log(`[Engine] Bybit ticker 실패: ${err}`);
+    // 개별 심볼 폴백
+    for (const s of symbols) {
+      if (prices[s]) continue;
       try {
-        const row = await db.prepare(
-          "SELECT entry_price FROM trades WHERE symbol = ? AND status = 'CLOSED' ORDER BY closed_at DESC LIMIT 1"
-        ).bind(s.replace('/', '')).first<{ entry_price: number }>();
-        if (row?.entry_price) {
-          prices[s] = row.entry_price;
-          console.log(`[Engine] ${s}: DB 캐시 가격 사용 ($${row.entry_price})`);
+        const res = await fetch(`${BYBIT_API}/v5/market/tickers?category=spot&symbol=${s}`);
+        if (res.ok) {
+          const d = await res.json() as { retCode: number; result: { list: Array<{ symbol: string; lastPrice: string }> } };
+          if (d.retCode === 0 && d.result.list.length > 0) {
+            prices[s] = parseFloat(d.result.list[0].lastPrice);
+          }
         }
-      } catch { /* ignore */ }
-    }
-  }
-
-  // Last resort: use FALLBACK WITHOUT random noise (clearly marked)
-  const stillMissing = symbols.filter(s => !prices[s]);
-  for (const s of stillMissing) {
-    if (FALLBACK[s]) {
-      prices[s] = FALLBACK[s];
-      console.log(`[Engine] ⚠️ ${s}: 하드코딩 폴백 가격 사용 ($${FALLBACK[s]}) - 거래 건너뜀 권장`);
+      } catch { /* skip */ }
     }
   }
 
@@ -110,14 +86,15 @@ async function fetchCurrentPrices(symbols: string[], db?: D1Database): Promise<R
 }
 
 async function fetchHistory(symbol: string): Promise<number[]> {
-  const cid = COIN_MAP[symbol];
-  if (!cid) return [];
+  // Bybit v5 klines: 1시간봉 72개 = 3일 (interval=60 = 1시간)
+  // 주의: Bybit은 최신 데이터가 먼저 오므로 reverse 필요
   try {
-    const res = await fetch(`${CG}/coins/${cid}/market_chart?vs_currency=usd&days=3`,
-      { headers: { Accept: 'application/json', 'User-Agent': 'CryptoSentinel/2.0' } });
+    const res = await fetch(`${BYBIT_API}/v5/market/kline?category=spot&symbol=${symbol}&interval=60&limit=72`);
     if (!res.ok) return [];
-    const data = await res.json() as { prices?: number[][] };
-    return (data.prices || []).map(p => p[1]);
+    const data = await res.json() as { retCode: number; result: { list: string[][] } };
+    if (data.retCode !== 0 || !Array.isArray(data.result?.list)) return [];
+    // list: [[startTime, open, high, low, close, volume, turnover], ...] (newest first)
+    return data.result.list.reverse().map(k => parseFloat(k[4])); // close prices, oldest first
   } catch { return []; }
 }
 
@@ -290,7 +267,7 @@ async function recordTrade(db: D1Database, userId: string, botId: string, symbol
   const now = new Date().toISOString();
   await db.prepare(
     `INSERT INTO trades (id, user_id, bot_id, exchange, symbol, side, order_type, status, entry_price, quantity, pnl, pnl_percent, fee, exit_reason, timestamp, closed_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(generateId(), userId, botId, 'BINANCE', symbol.replace('/', ''), side, 'MARKET', 'CLOSED', price, quantity, +pnl.toFixed(2), price > 0 ? +((pnl / (price * quantity)) * 100).toFixed(2) : 0, +(price * quantity * 0.001).toFixed(4), reason, now, now, now).run();
+  ).bind(generateId(), userId, botId, 'BYBIT', symbol.replace('/', ''), side, 'MARKET', 'CLOSED', price, quantity, +pnl.toFixed(2), price > 0 ? +((pnl / (price * quantity)) * 100).toFixed(2) : 0, +(price * quantity * 0.001).toFixed(4), reason, now, now, now).run();
 }
 
 async function updateBotStats(db: D1Database, botId: string) {
@@ -713,84 +690,64 @@ function strategyRLAgent(price: number, ind: Indicators, pos: Position | undefin
   return null;
 }
 
-// 11. ENSEMBLE - 가중 투표 앙상블 전략
+// 11. ENSEMBLE - 가중 투표 앙상블 전략 (개선: 병렬 실행, 신뢰도 기반 사이징)
 function strategyEnsemble(
   price: number, ind: Indicators, pos: Position | undefined, cash: number,
   config: Record<string, unknown>, state: Record<string, unknown>
 ): { signal: TradeSignal | null; newState: Record<string, unknown> } {
   const strategies = (config.strategies as string[]) || [];
   const weights = (config.weights as Record<string, number>) || {};
-  const buyThreshold = Number(config.buyThreshold || 1.5);
-  const sellThreshold = Number(config.sellThreshold || -1.5);
+  const buyThreshold = Number(config.buyThreshold || 1.2);
+  const sellThreshold = Number(config.sellThreshold || -1.2);
 
   if (strategies.length < 2) return { signal: null, newState: state };
 
+  // 서브 전략 디스패치 함수 (중복 제거 + 각 전략 독립 실행)
+  function runSubStrategy(strat: string): { signal: TradeSignal | null; state: Record<string, unknown> } {
+    switch (strat) {
+      case 'DCA': return { signal: strategyDCA(price, ind, pos, cash, config), state };
+      case 'GRID': { const r = strategyGrid(price, ind, pos, cash, config, state); return { signal: r.signal, state: r.newState }; }
+      case 'MOMENTUM': { const r = strategyMomentum(price, ind, pos, cash, config, state); return { signal: r.signal, state: r.newState }; }
+      case 'MEAN_REVERSION': return { signal: strategyMeanReversion(price, ind, pos, cash, config), state };
+      case 'TRAILING': { const r = strategyTrailing(price, ind, pos, cash, config, state); return { signal: r.signal, state: r.newState }; }
+      case 'MARTINGALE': { const r = strategyMartingale(price, ind, pos, cash, config, state); return { signal: r.signal, state: r.newState }; }
+      case 'SCALPING': return { signal: strategyScalping(price, ind, pos, cash, config), state };
+      case 'STAT_ARB': return { signal: strategyStatArb(price, ind, pos, cash, config), state };
+      case 'FUNDING_ARB': return { signal: strategyFundingArb(price, ind, pos, cash, config), state };
+      case 'RL_AGENT': return { signal: strategyRLAgent(price, ind, pos, cash, config), state };
+      default: return { signal: null, state };
+    }
+  }
+
+  // 모든 서브 전략 병렬 실행 (동기 함수이므로 즉시 결과)
+  const results = strategies.map(strat => ({ strat, ...runSubStrategy(strat) }));
+
   let buyVotes = 0;
   let sellVotes = 0;
-  let maxBuySize = 0;
-  let maxSellSize = 0;
+  let totalBuySize = 0;
+  let totalSellSize = 0;
+  let buyCount = 0;
+  let sellCount = 0;
   const reasons: string[] = [];
   let updatedState = { ...state };
 
-  for (const strat of strategies) {
+  for (const { strat, signal: subSignal, state: subState } of results) {
     const w = weights[strat] ?? 1.0;
-    let subSignal: TradeSignal | null = null;
-    let subState = state;
-
-    switch (strat) {
-      case 'DCA':
-        subSignal = strategyDCA(price, ind, pos, cash, config);
-        break;
-      case 'GRID': {
-        const r = strategyGrid(price, ind, pos, cash, config, state);
-        subSignal = r.signal; subState = r.newState;
-        break;
-      }
-      case 'MOMENTUM': {
-        const r = strategyMomentum(price, ind, pos, cash, config, state);
-        subSignal = r.signal; subState = r.newState;
-        break;
-      }
-      case 'MEAN_REVERSION':
-        subSignal = strategyMeanReversion(price, ind, pos, cash, config);
-        break;
-      case 'TRAILING': {
-        const r = strategyTrailing(price, ind, pos, cash, config, state);
-        subSignal = r.signal; subState = r.newState;
-        break;
-      }
-      case 'MARTINGALE': {
-        const r = strategyMartingale(price, ind, pos, cash, config, state);
-        subSignal = r.signal; subState = r.newState;
-        break;
-      }
-      case 'SCALPING':
-        subSignal = strategyScalping(price, ind, pos, cash, config);
-        break;
-      case 'STAT_ARB':
-        subSignal = strategyStatArb(price, ind, pos, cash, config);
-        break;
-      case 'FUNDING_ARB':
-        subSignal = strategyFundingArb(price, ind, pos, cash, config);
-        break;
-      case 'RL_AGENT':
-        subSignal = strategyRLAgent(price, ind, pos, cash, config);
-        break;
-    }
 
     if (subSignal) {
       if (subSignal.side === 'BUY') {
         buyVotes += w;
-        if (subSignal.cost > maxBuySize) maxBuySize = subSignal.cost;
-        reasons.push(`${strat}:BUY(w${w})`);
+        totalBuySize += subSignal.cost;
+        buyCount++;
+        reasons.push(`${strat}:BUY(w${w.toFixed(1)})`);
       } else {
         sellVotes += w;
-        if (subSignal.quantity > maxSellSize) maxSellSize = subSignal.quantity;
-        reasons.push(`${strat}:SELL(w${w})`);
+        totalSellSize += subSignal.quantity;
+        sellCount++;
+        reasons.push(`${strat}:SELL(w${w.toFixed(1)})`);
       }
     }
 
-    // 상태 가능한 전략 결과 병합
     if (subState !== state) {
       updatedState = { ...updatedState, [`_${strat}`]: subState };
     }
@@ -800,24 +757,34 @@ function strategyEnsemble(
   const normalizedBuy = totalWeight > 0 ? (buyVotes / totalWeight) * strategies.length : buyVotes;
   const normalizedSell = totalWeight > 0 ? (-sellVotes / totalWeight) * strategies.length : -sellVotes;
 
+  // 신호 합의 비율 (얼마나 많은 전략이 동의하는지)
+  const buyConsensus = strategies.length > 0 ? buyCount / strategies.length : 0;
+  const sellConsensus = strategies.length > 0 ? sellCount / strategies.length : 0;
+
   let signal: TradeSignal | null = null;
 
-  if (normalizedBuy >= buyThreshold && maxBuySize > 0) {
-    // 가중 평균 크기 계산 (최대 크기의 60~100%)
-    const sizeRatio = Math.min(1.0, 0.6 + (normalizedBuy - buyThreshold) * 0.2);
-    const cost = maxBuySize * sizeRatio;
-    if (cost >= 30 && cash >= cost) {
+  if (normalizedBuy >= buyThreshold && totalBuySize > 0) {
+    // 신뢰도 기반 사이징: 합의 비율과 점수에 비례
+    const confidenceRatio = Math.min(1.0, 0.4 + buyConsensus * 0.4 + (normalizedBuy - buyThreshold) * 0.15);
+    const avgBuySize = totalBuySize / buyCount;
+    const cost = avgBuySize * confidenceRatio;
+    if (cost >= 20 && cash >= cost) {
       signal = {
         side: 'BUY', quantity: cost / price, cost,
-        reason: `앙상블 매수 (${reasons.join(', ')}, 점수 ${normalizedBuy.toFixed(1)})`
+        reason: `앙상블 매수 (${reasons.join(', ')}, 점수 ${normalizedBuy.toFixed(1)}, 합의 ${(buyConsensus * 100).toFixed(0)}%)`
       };
     }
-  } else if (normalizedSell <= sellThreshold && maxSellSize > 0 && pos && pos.amount > 0) {
-    const sellQty = Math.min(maxSellSize, pos.amount);
-    signal = {
-      side: 'SELL', quantity: sellQty, cost: sellQty * price,
-      reason: `앙상블 매도 (${reasons.join(', ')}, 점수 ${normalizedSell.toFixed(1)})`
-    };
+  } else if (normalizedSell <= sellThreshold && totalSellSize > 0 && pos && pos.amount > 0) {
+    // 매도: 합의가 높을수록 더 많이 매도 (부분 청산 지원)
+    const sellRatio = Math.min(1.0, 0.5 + sellConsensus * 0.5);
+    const avgSellSize = totalSellSize / sellCount;
+    const sellQty = Math.min(avgSellSize * sellRatio, pos.amount);
+    if (sellQty > 0) {
+      signal = {
+        side: 'SELL', quantity: sellQty, cost: sellQty * price,
+        reason: `앙상블 매도 (${reasons.join(', ')}, 점수 ${normalizedSell.toFixed(1)}, 합의 ${(sellConsensus * 100).toFixed(0)}%)`
+      };
+    }
   }
 
   return { signal, newState: updatedState };
@@ -839,22 +806,18 @@ export async function runPaperTrading(env: Env): Promise<string[]> {
   // 2. Collect unique symbols
   const symbols = [...new Set(bots.map(b => b.symbol.replace('/', '')))];
 
-  // 3. Fetch current prices (DB 캐시 폴백 포함)
-  const prices = await fetchCurrentPrices(symbols, db);
+  // 3. Fetch current prices (Bybit API)
+  const prices = await fetchCurrentPrices(symbols);
   log(`가격: ${Object.entries(prices).map(([s, p]) => `${s}=$${p.toFixed(2)}`).join(', ')}`);
 
-  // Wait 2s before fetching history to avoid CoinGecko rate limit
-  await new Promise(r => setTimeout(r, 2000));
-
-  // 4. Fetch history & calculate indicators per symbol (with rate limit delay)
+  // 4. Fetch history & calculate indicators per symbol (Bybit v5)
   const indicatorMap: Record<string, Indicators> = {};
-  for (let i = 0; i < symbols.length; i++) {
-    const sym = symbols[i];
-    if (i > 0) await new Promise(r => setTimeout(r, 2000));
+  const historyPromises = symbols.map(async (sym) => {
     const history = await fetchHistory(sym);
     indicatorMap[sym] = calcIndicators(history, prices[sym] || 0);
     log(`${sym}: RSI=${indicatorMap[sym].rsi.toFixed(1)}, Z=${indicatorMap[sym].zScore.toFixed(2)}, 추세=${indicatorMap[sym].trend > 0 ? '↑' : indicatorMap[sym].trend < 0 ? '↓' : '→'}${history.length === 0 ? ' (히스토리 없음)' : ''}`);
-  }
+  });
+  await Promise.all(historyPromises);
 
   // 5. Group bots by user
   const userBots = new Map<string, BotRow[]>();

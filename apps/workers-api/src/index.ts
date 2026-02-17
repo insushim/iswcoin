@@ -104,9 +104,19 @@ app.use('/api/*', async (c, next) => {
   return next();
 });
 
-app.get('/api/health', (c) => {
+app.get('/api/health', async (c) => {
   c.header('Cache-Control', 'no-cache');
-  return c.json({ status: 'ok', timestamp: new Date().toISOString(), runtime: 'cloudflare-workers' });
+  let bybitStatus = 'unknown';
+  try {
+    const res = await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT');
+    const data = await res.json() as { retCode: number; result?: { list?: Array<{ lastPrice: string }> } };
+    if (res.ok && data.retCode === 0 && data.result?.list?.[0]?.lastPrice) {
+      bybitStatus = `OK ($${parseFloat(data.result.list[0].lastPrice).toFixed(0)})`;
+    } else {
+      bybitStatus = `FAIL (${res.status})`;
+    }
+  } catch (err) { bybitStatus = `ERROR: ${err}`; }
+  return c.json({ status: 'ok', timestamp: new Date().toISOString(), runtime: 'cloudflare-workers', dataProvider: 'bybit', bybit: bybitStatus });
 });
 
 // Manual trigger for paper trading engine (보호됨)

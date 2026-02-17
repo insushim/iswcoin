@@ -94,8 +94,8 @@ export default function PaperTradingPage() {
   const fetchPaperBots = useCallback(async () => {
     try {
       const res = await api.get(endpoints.bots.list);
-      const allBots: BotInfo[] = res.data.bots ?? [];
-      const papers = allBots.filter((b) => b.mode === "PAPER");
+      const allBots: BotInfo[] = res.data.data ?? res.data ?? [];
+      const papers = allBots.filter((b) => b.mode === "PAPER" || b.mode === undefined);
       setPaperBots(papers);
 
       if (papers.length > 0 && !selectedBotId) {

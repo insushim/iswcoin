@@ -33,11 +33,45 @@ const ENSEMBLE_SUB_STRATEGIES = [
   { value: "FUNDING_ARB", label: "펀딩비 차익거래" },
 ] as const;
 
-const ENSEMBLE_PRESETS: Record<string, { label: string; strategies: string[]; weights: Record<string, number> }> = {
-  stable: { label: "안정형 (횡보장 최적)", strategies: ["DCA", "MEAN_REVERSION", "GRID"], weights: { DCA: 1.2, MEAN_REVERSION: 1.0, GRID: 0.8 } },
-  aggressive: { label: "공격형 (추세장 최적)", strategies: ["MOMENTUM", "SCALPING", "TRAILING"], weights: { MOMENTUM: 1.2, SCALPING: 1.0, TRAILING: 0.8 } },
-  balanced: { label: "균형형 (전천후)", strategies: ["DCA", "MOMENTUM", "STAT_ARB"], weights: { DCA: 1.0, MOMENTUM: 1.0, STAT_ARB: 1.0 } },
-  ai: { label: "AI형 (데이터 기반)", strategies: ["RL_AGENT", "MEAN_REVERSION", "FUNDING_ARB"], weights: { RL_AGENT: 1.5, MEAN_REVERSION: 1.0, FUNDING_ARB: 0.8 } },
+// 전략별 기본 가중치 (전략 특성에 맞게 차별화)
+const STRATEGY_DEFAULT_WEIGHTS: Record<string, number> = {
+  DCA: 0.8,            // 항상 매수 경향 → 낮은 가중치
+  GRID: 0.9,           // 횡보장 수익 → 보통
+  MARTINGALE: 0.6,     // 고위험 → 낮은 가중치
+  TRAILING: 1.2,       // 수익 보호 → 높은 가중치
+  MOMENTUM: 1.5,       // 추세 추종 핵심 → 높은 가중치
+  MEAN_REVERSION: 1.3, // 통계적 신뢰도 높음
+  RL_AGENT: 1.0,       // AI 신호 → 중립
+  STAT_ARB: 1.5,       // 통계적 신뢰도 최고
+  SCALPING: 1.0,       // 단기 변동 → 중립
+  FUNDING_ARB: 0.8,    // 보조 신호 → 낮은 가중치
+};
+
+const ENSEMBLE_PRESETS: Record<string, { label: string; strategies: string[]; weights: Record<string, number>; buyThreshold: number; sellThreshold: number }> = {
+  stable: {
+    label: "안정형 (횡보장 최적)",
+    strategies: ["DCA", "MEAN_REVERSION", "GRID", "TRAILING"],
+    weights: { DCA: 1.0, MEAN_REVERSION: 1.5, GRID: 1.2, TRAILING: 1.3 },
+    buyThreshold: 1.2, sellThreshold: -1.2,
+  },
+  aggressive: {
+    label: "공격형 (추세장 최적)",
+    strategies: ["MOMENTUM", "SCALPING", "TRAILING"],
+    weights: { MOMENTUM: 2.0, SCALPING: 1.2, TRAILING: 1.5 },
+    buyThreshold: 1.0, sellThreshold: -1.0,
+  },
+  balanced: {
+    label: "균형형 (전천후)",
+    strategies: ["MOMENTUM", "MEAN_REVERSION", "STAT_ARB", "TRAILING"],
+    weights: { MOMENTUM: 1.5, MEAN_REVERSION: 1.3, STAT_ARB: 1.5, TRAILING: 1.2 },
+    buyThreshold: 1.2, sellThreshold: -1.2,
+  },
+  ai: {
+    label: "AI형 (데이터 기반)",
+    strategies: ["RL_AGENT", "STAT_ARB", "MEAN_REVERSION", "FUNDING_ARB"],
+    weights: { RL_AGENT: 1.8, STAT_ARB: 1.5, MEAN_REVERSION: 1.2, FUNDING_ARB: 0.8 },
+    buyThreshold: 1.0, sellThreshold: -1.0,
+  },
 };
 
 const STRATEGY_CONFIGS: Record<StrategyType, ConfigField[]> = {
@@ -110,8 +144,8 @@ const STRATEGY_CONFIGS: Record<StrategyType, ConfigField[]> = {
     { key: "minFundingCycles", label: "최소 펀딩 횟수", type: "number", defaultValue: 3, helperText: "최소 수취 주기 (8h × N)" },
   ],
   [StrategyType.ENSEMBLE]: [
-    { key: "buyThreshold", label: "매수 임계값", type: "number", defaultValue: 1.5, helperText: "가중 투표 합산이 이 값 이상이면 매수" },
-    { key: "sellThreshold", label: "매도 임계값", type: "number", defaultValue: -1.5, helperText: "가중 투표 합산이 이 값 이하이면 매도" },
+    { key: "buyThreshold", label: "매수 임계값", type: "number", defaultValue: 1.2, helperText: "가중 투표 합산이 이 값 이상이면 매수 (낮을수록 공격적)" },
+    { key: "sellThreshold", label: "매도 임계값", type: "number", defaultValue: -1.2, helperText: "가중 투표 합산이 이 값 이하이면 매도 (0에 가까울수록 공격적)" },
   ],
 };
 
@@ -141,7 +175,8 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
       const { [strat]: _, ...restWeights } = weights;
       onChange({ ...config, strategies: next as never, weights: restWeights as never });
     } else {
-      onChange({ ...config, strategies: [...current, strat] as never, weights: { ...weights, [strat]: 1.0 } as never });
+      const defaultWeight = STRATEGY_DEFAULT_WEIGHTS[strat] ?? 1.0;
+      onChange({ ...config, strategies: [...current, strat] as never, weights: { ...weights, [strat]: defaultWeight } as never });
     }
     setSelectedPreset("");
   };
@@ -161,6 +196,8 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
       ...config,
       strategies: preset.strategies as never,
       weights: preset.weights as never,
+      buyThreshold: preset.buyThreshold,
+      sellThreshold: preset.sellThreshold,
     });
   };
 
@@ -297,11 +334,13 @@ export function getDefaultConfig(strategy: StrategyType): Record<string, number 
   fields.forEach((f) => {
     config[f.key] = f.defaultValue;
   });
-  // 앙상블 기본값: 균형형 프리셋
+  // 앙상블 기본값: 균형형 프리셋 (임계값 포함)
   if (strategy === StrategyType.ENSEMBLE) {
     const preset = ENSEMBLE_PRESETS.balanced;
     (config as Record<string, unknown>).strategies = preset.strategies;
     (config as Record<string, unknown>).weights = preset.weights;
+    config.buyThreshold = preset.buyThreshold;
+    config.sellThreshold = preset.sellThreshold;
   }
   return config;
 }
