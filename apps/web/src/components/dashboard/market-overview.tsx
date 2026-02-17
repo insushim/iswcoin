@@ -29,15 +29,25 @@ const COIN_NAMES: Record<string, string> = {
 };
 
 export function MarketOverview({ tickers }: MarketOverviewProps) {
+  // 24h 변화율 기반 결정론적 미니 바 생성 (랜덤 데이터 제거)
   const sparklineData = useMemo(() => {
     const data = new Map<string, number[]>();
     for (const t of tickers) {
       if (!data.has(t.symbol)) {
-        data.set(t.symbol, Array.from({ length: 12 }, () => 30 + Math.random() * 70));
+        // 가격 변화율 기반으로 12개 포인트 생성 (결정론적)
+        const change = t.change24h || 0;
+        const bars = Array.from({ length: 12 }, (_, i) => {
+          // 0→현재 변화율까지 점진적 변화 + 약간의 사인파 변동
+          const progress = i / 11;
+          const trend = 40 + (change > 0 ? progress * 30 : -progress * 20);
+          const wave = Math.sin(i * 0.8) * 10;
+          return Math.max(5, Math.min(95, trend + wave));
+        });
+        data.set(t.symbol, bars);
       }
     }
     return data;
-  }, [tickers.map(t => t.symbol).join(',')]);
+  }, [tickers.map(t => `${t.symbol}:${t.change24h}`).join(',')]);
 
   return (
     <Card>

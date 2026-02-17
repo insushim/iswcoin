@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
+  FileBarChart,
 } from "lucide-react";
 
 const navItems = [
@@ -23,6 +24,7 @@ const navItems = [
   { href: "/bots", label: "트레이딩 봇", icon: Bot },
   { href: "/trades", label: "거래 내역", icon: ArrowLeftRight },
   { href: "/market", label: "시장 분석", icon: LineChart },
+  { href: "/paper-trading", label: "모의 투자", icon: FileBarChart },
   { href: "/backtest", label: "백테스트", icon: FlaskConical },
   { href: "/portfolio", label: "포트폴리오", icon: Wallet },
   { href: "/regime", label: "시장 국면", icon: Gauge },

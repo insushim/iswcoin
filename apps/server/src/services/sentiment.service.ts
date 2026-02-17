@@ -80,21 +80,33 @@ export class SentimentService {
   }
 
   async getWhaleActivity(): Promise<WhaleActivityData> {
-    const simulatedData: WhaleActivityData = {
-      largeTxCount24h: Math.floor(Math.random() * 50) + 10,
-      netFlow: (Math.random() - 0.5) * 10000,
+    try {
+      // blockchain.info: 최근 대규모 BTC 거래 조회
+      const res = await fetch('https://blockchain.info/latestblock', {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) {
+        const block = (await res.json()) as { n_tx: number; height: number };
+        // 블록 트랜잭션 수 기반 대략적 고래 활동 추정
+        const estimatedLargeTx = Math.max(1, Math.floor(block.n_tx * 0.02)); // ~2%가 대규모
+        return {
+          largeTxCount24h: estimatedLargeTx,
+          netFlow: 0, // 정확한 넷플로우는 전문 API 필요
+          dominantDirection: 'neutral',
+          lastUpdated: Date.now(),
+        };
+      }
+    } catch (err) {
+      logger.warn('Whale activity fetch failed', { error: String(err) });
+    }
+
+    // API 실패 시 0값 반환 (랜덤 대신)
+    return {
+      largeTxCount24h: 0,
+      netFlow: 0,
       dominantDirection: 'neutral',
       lastUpdated: Date.now(),
     };
-
-    if (simulatedData.netFlow > 2000) {
-      simulatedData.dominantDirection = 'inflow';
-    } else if (simulatedData.netFlow < -2000) {
-      simulatedData.dominantDirection = 'outflow';
-    }
-
-    logger.debug('Whale activity data generated', simulatedData);
-    return simulatedData;
   }
 
   async aggregateSentiment(): Promise<SentimentResult> {

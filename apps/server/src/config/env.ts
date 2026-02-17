@@ -32,6 +32,10 @@ const envSchema = z.object({
   PYTHON_ENGINE_URL: z.string().default('http://localhost:8000'),
   SENTRY_DSN: z.string().optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  // Paper Trading
+  PAPER_INITIAL_BALANCE: z.coerce.number().default(10000),
+  PAPER_SLIPPAGE_ENABLED: z.enum(['true', 'false']).default('true'),
+  PAPER_LOOP_INTERVAL_MS: z.coerce.number().default(300000), // 5분
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

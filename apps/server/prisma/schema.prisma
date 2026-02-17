@@ -25,6 +25,7 @@ enum Strategy {
   STAT_ARB
   SCALPING
   FUNDING_ARB
+  ENSEMBLE
 }
 
 enum BotMode {

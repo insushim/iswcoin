@@ -2,10 +2,12 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { logger } from '../utils/logger.js';
 import { getStrategy, type StrategyType } from '../strategies/index.js';
-import { exchangeService, type SupportedExchange } from './exchange.service.js';
+import { exchangeService, EXCHANGE_FEE_RATES, type SupportedExchange } from './exchange.service.js';
 import { indicatorsService } from './indicators.service.js';
 import { riskManager } from './risk.service.js';
+import { slippageService } from './slippage.service.js';
 import { decrypt } from '../utils/encryption.js';
+import { env } from '../config/env.js';
 
 // ===== 포지션 추적 인터페이스 =====
 interface TrackedPosition {
@@ -49,8 +51,6 @@ interface PaperTradeLog {
 }
 
 // 매직 넘버 상수화
-const DEFAULT_FEE_RATE = 0.001;
-const BOT_LOOP_INTERVAL_MS = 60_000;
 const MAX_PAPER_LOGS = 1000;
 const MIN_CONFIDENCE_THRESHOLD = 0.3;
 const MIN_ORDER_VALUE_USDT = 10;
@@ -306,6 +306,122 @@ class BotRunnerService {
   }
 
   /**
+   * Paper trade 종합 통계 (API 노출용 - summary)
+   */
+  getPaperTradeSummary(botId: string): {
+    balance: number;
+    initialBalance: number;
+    totalPnl: number;
+    totalPnlPct: number;
+    netPnl: number;
+    totalTrades: number;
+    wins: number;
+    losses: number;
+    winRate: number;
+    sharpeRatio: number;
+    maxDrawdown: number;
+    maxDrawdownPct: number;
+    profitFactor: number;
+    avgWin: number;
+    avgLoss: number;
+    equityCurve: { date: string; value: number }[];
+    dailyPnl: { date: string; pnl: number }[];
+  } {
+    const logs = this.paperTradeLogs.get(botId) ?? [];
+    const initialBalance = env.PAPER_INITIAL_BALANCE;
+
+    // 체결된 거래만 추출
+    const executedLogs = logs.filter(l => l.execution !== null);
+
+    // 라운드트립 수익 추적 (매도 시점의 실현 PnL)
+    const roundTripPnls: number[] = [];
+    let totalFees = 0;
+
+    for (const log of executedLogs) {
+      if (log.execution) {
+        totalFees += log.execution.fee;
+      }
+      if (log.execution?.side === 'sell' && log.position && !log.position.isOpen) {
+        roundTripPnls.push(log.position.unrealizedPnl);
+      }
+    }
+
+    const wins = roundTripPnls.filter(p => p > 0).length;
+    const losses = roundTripPnls.filter(p => p <= 0).length;
+    const winRate = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
+
+    const totalGrossProfit = roundTripPnls.filter(p => p > 0).reduce((s, p) => s + p, 0);
+    const totalGrossLoss = Math.abs(roundTripPnls.filter(p => p <= 0).reduce((s, p) => s + p, 0));
+    const profitFactor = totalGrossLoss > 0 ? totalGrossProfit / totalGrossLoss : totalGrossProfit > 0 ? Infinity : 0;
+
+    const avgWin = wins > 0 ? totalGrossProfit / wins : 0;
+    const avgLoss = losses > 0 ? totalGrossLoss / losses : 0;
+
+    // 에쿼티 커브 & MDD 계산
+    const equityCurve: { date: string; value: number }[] = [];
+    const dailyPnlMap = new Map<string, number>();
+    let peak = initialBalance;
+    let maxDrawdown = 0;
+
+    for (const log of logs) {
+      const dateStr = new Date(log.timestamp).toISOString().split('T')[0]!;
+
+      // 에쿼티 커브: 모든 로그 시점의 잔고
+      if (log.paperBalance > 0) {
+        equityCurve.push({ date: dateStr, value: log.paperBalance });
+
+        if (log.paperBalance > peak) peak = log.paperBalance;
+        const dd = peak - log.paperBalance;
+        if (dd > maxDrawdown) maxDrawdown = dd;
+      }
+
+      // 일별 PnL 계산 (체결 시점만)
+      if (log.execution?.side === 'sell' && log.position) {
+        const existing = dailyPnlMap.get(dateStr) ?? 0;
+        dailyPnlMap.set(dateStr, existing + log.position.unrealizedPnl);
+      }
+    }
+
+    const dailyPnl = Array.from(dailyPnlMap.entries()).map(([date, pnl]) => ({ date, pnl }));
+
+    // 샤프 비율: 일별 수익률의 평균/표준편차 * sqrt(252)
+    let sharpeRatio = 0;
+    if (dailyPnl.length >= 2) {
+      const dailyReturns = dailyPnl.map(d => d.pnl / initialBalance);
+      const mean = dailyReturns.reduce((s, r) => s + r, 0) / dailyReturns.length;
+      const variance = dailyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / dailyReturns.length;
+      const stdDev = Math.sqrt(variance);
+      sharpeRatio = stdDev > 0 ? (mean / stdDev) * Math.sqrt(252) : 0;
+    }
+
+    const lastLog = logs[logs.length - 1];
+    const currentBalance = lastLog?.paperBalance ?? initialBalance;
+    const totalPnl = currentBalance - initialBalance;
+    const totalPnlPct = initialBalance > 0 ? (totalPnl / initialBalance) * 100 : 0;
+    const maxDrawdownPct = peak > 0 ? (maxDrawdown / peak) * 100 : 0;
+
+    return {
+      balance: currentBalance,
+      initialBalance,
+      totalPnl,
+      totalPnlPct,
+      netPnl: totalPnl - totalFees,
+      totalTrades: executedLogs.length,
+      wins,
+      losses,
+      winRate,
+      sharpeRatio: Math.round(sharpeRatio * 100) / 100,
+      maxDrawdown,
+      maxDrawdownPct: Math.round(maxDrawdownPct * 100) / 100,
+      profitFactor: profitFactor === Infinity ? 999 : Math.round(profitFactor * 100) / 100,
+      avgWin: Math.round(avgWin * 100) / 100,
+      avgLoss: Math.round(avgLoss * 100) / 100,
+      equityCurve,
+      dailyPnl,
+    };
+  }
+
+  /**
    * Paper 모드 상태를 DB에 저장 (봇 중지 시 호출)
    */
   private async savePaperState(botId: string): Promise<void> {
@@ -356,7 +472,7 @@ class BotRunnerService {
       this.paperBalances.set(bot.id, paperState.balance);
       logger.info('Paper balance restored', { botId: bot.id, balance: paperState.balance, savedAt: paperState.savedAt });
     } else {
-      this.paperBalances.set(bot.id, { USDT: 10000 });
+      this.paperBalances.set(bot.id, { USDT: env.PAPER_INITIAL_BALANCE });
     }
 
     if (paperState?.positions?.length) {
@@ -400,7 +516,7 @@ class BotRunnerService {
       }
 
       const restoredBalance = this.paperBalances.get(botId);
-      const initialBalance = restoredBalance?.USDT ?? 10000;
+      const initialBalance = restoredBalance?.USDT ?? env.PAPER_INITIAL_BALANCE;
       exchangeService.initPaperExchange(exchangeName, initialBalance);
     }
 
@@ -606,7 +722,7 @@ class BotRunnerService {
           });
 
           if (mode === 'PAPER') {
-            await this.executePaperTrade(botId, symbol, exchangeName, signal, currentPrice, currentPosition, atr);
+            await this.executePaperTrade(botId, symbol, exchangeName, signal, currentPrice, currentPosition, atr, ohlcvData);
           } else if (exchange) {
             await this.executeRealTrade(botId, symbol, exchange, signal, currentPrice, currentPosition, atr, userId);
           }
@@ -633,16 +749,18 @@ class BotRunnerService {
 
       // 이전 반복 완료 후 다음 반복 스케줄 (겹침 방지)
       if (!control.stopped) {
-        control.timerId = setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
+        const interval = mode === 'PAPER' ? env.PAPER_LOOP_INTERVAL_MS : 60_000;
+        control.timerId = setTimeout(runLoop, interval);
       }
     };
 
-    // 첫 반복 스케줄
-    control.timerId = setTimeout(runLoop, BOT_LOOP_INTERVAL_MS);
+    // 첫 반복 스케줄 (PAPER 모드는 환경변수 간격, REAL은 60초)
+    const firstInterval = mode === 'PAPER' ? env.PAPER_LOOP_INTERVAL_MS : 60_000;
+    control.timerId = setTimeout(runLoop, firstInterval);
   }
 
   /**
-   * Paper 거래 실행
+   * Paper 거래 실행 (슬리피지 시뮬레이션 통합)
    */
   private async executePaperTrade(
     botId: string,
@@ -651,7 +769,8 @@ class BotRunnerService {
     signal: { action: string; confidence: number; reason: string; price: number; stopLoss?: number; takeProfit?: number; metadata?: Record<string, number | string> },
     currentPrice: number,
     currentPosition: TrackedPosition | null,
-    atr: number
+    atr: number,
+    ohlcvData?: { high: number; low: number; close: number; volume: number }[]
   ): Promise<void> {
     const paper = exchangeService.getPaperExchange(exchangeName);
     if (!paper) return;
@@ -677,9 +796,29 @@ class BotRunnerService {
 
     if (orderAmount <= 0) return;
 
+    // 슬리피지 시뮬레이션
+    let slippageAdjustedPrice = currentPrice;
+    if (env.PAPER_SLIPPAGE_ENABLED === 'true' && ohlcvData && ohlcvData.length > 15) {
+      const { currentATR, avgVolume } = slippageService.extractSlippageInputs(ohlcvData);
+      const orderSizeUSD = orderAmount * currentPrice;
+      const currentVolume = ohlcvData[ohlcvData.length - 1]?.volume ?? 0;
+      const slippagePct = slippageService.calculateDynamicSlippage(
+        0.0005, currentATR, currentPrice, currentVolume, avgVolume, orderSizeUSD
+      );
+      // 매수 시 +슬리피지 (불리하게), 매도 시 -슬리피지 (불리하게)
+      slippageAdjustedPrice = signal.action === 'buy'
+        ? currentPrice * (1 + slippagePct)
+        : currentPrice * (1 - slippagePct);
+
+      logger.debug('Paper trade slippage applied', {
+        botId, original: currentPrice, adjusted: slippageAdjustedPrice, slippagePct,
+      });
+    }
+
     try {
-      const order = await paper.createOrder(symbol, signal.action as 'buy' | 'sell', 'market', orderAmount);
-      const fee = order.price * order.amount * DEFAULT_FEE_RATE;
+      const order = await paper.createOrder(symbol, signal.action as 'buy' | 'sell', 'market', orderAmount, slippageAdjustedPrice);
+      const feeRate = EXCHANGE_FEE_RATES[exchangeName] ?? 0.001;
+      const fee = order.price * order.amount * feeRate;
 
       // 포지션 업데이트
       if (signal.action === 'buy') {

@@ -113,12 +113,18 @@ export class PaperExchange {
   private orders: PaperOrder[] = [];
   private orderIdCounter = 0;
   private realExchange: Exchange | null;
+  private feeRate: number;
 
-  constructor(initialBalance: number = 10000, realExchange: Exchange | null = null) {
+  constructor(initialBalance: number = 10000, realExchange: Exchange | null = null, feeRate: number = 0.001) {
     this.balance = {
       USDT: { free: initialBalance, used: 0, total: initialBalance },
     };
     this.realExchange = realExchange;
+    this.feeRate = feeRate;
+  }
+
+  getFeeRate(): number {
+    return this.feeRate;
   }
 
   async getTicker(symbol: string): Promise<Ticker | null> {
@@ -148,7 +154,7 @@ export class PaperExchange {
     }
 
     const cost = fillPrice * amount;
-    const fee = cost * 0.001;
+    const fee = cost * this.feeRate;
     const [base] = symbol.split('/') as [string, string];
 
     if (side === 'buy') {
@@ -230,6 +236,14 @@ export class PaperExchange {
 
 export type SupportedExchange = 'binance' | 'upbit' | 'bybit' | 'bithumb';
 
+// 거래소별 수수료율 (메이커/테이커 평균)
+export const EXCHANGE_FEE_RATES: Record<SupportedExchange, number> = {
+  binance: 0.001,   // 0.1%
+  upbit: 0.0005,    // 0.05%
+  bybit: 0.001,     // 0.1%
+  bithumb: 0.0015,  // 0.15%
+};
+
 export class ExchangeService {
   private exchanges: Map<string, Exchange> = new Map();
   private paperExchanges: Map<string, PaperExchange> = new Map();
@@ -303,9 +317,10 @@ export class ExchangeService {
 
   initPaperExchange(exchangeName: SupportedExchange, initialBalance: number = 10000, realExchange?: Exchange): PaperExchange {
     const key = `paper:${exchangeName}`;
-    const paper = new PaperExchange(initialBalance, realExchange ?? null);
+    const feeRate = EXCHANGE_FEE_RATES[exchangeName] ?? 0.001;
+    const paper = new PaperExchange(initialBalance, realExchange ?? null, feeRate);
     this.paperExchanges.set(key, paper);
-    logger.info(`Paper exchange initialized: ${exchangeName} with $${initialBalance}`);
+    logger.info(`Paper exchange initialized: ${exchangeName} with $${initialBalance}, fee: ${(feeRate * 100).toFixed(2)}%`);
     return paper;
   }
 

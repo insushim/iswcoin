@@ -191,8 +191,8 @@ marketRoutes.get('/sentiment', async (c) => {
         fearGreedIndex: fgIndex,
         fearGreedLabel,
         classification,
-        socialScore: Math.min(100, fgIndex + Math.floor(Math.random() * 10) - 5),
-        newsScore: Math.min(100, fgIndex + Math.floor(Math.random() * 15) - 7),
+        socialScore: Math.min(100, Math.max(0, fgIndex)),
+        newsScore: Math.min(100, Math.max(0, fgIndex)),
         whaleActivity: fgIndex > 60 ? 'Accumulating' : fgIndex < 40 ? 'Distributing' : 'Neutral',
         timestamp: Date.now(),
         overall: fgIndex,
@@ -362,23 +362,11 @@ marketRoutes.get('/indicators/:symbol', async (c) => {
       },
     });
   } catch {
-    // Return realistic fallback data
+    // API 실패 시 에러 반환 (가짜 데이터 대신)
     return c.json({
-      data: {
-        symbol,
-        rsi: 52.5,
-        macd: { line: 45.2, signal: 38.1, histogram: 7.1 },
-        bollingerBands: { upper: 100000, middle: 96000, lower: 92000 },
-        ema20: 96500,
-        ema50: 95000,
-        ema200: 90000,
-        atr: 1500,
-        volume24h: 25000000000,
-        volumeChange: 5.2,
-        currentPrice: 97000,
-        priceChange: 1.5,
-      },
-    });
+      error: '기술적 지표를 계산할 수 없습니다. CoinGecko API 제한일 수 있습니다.',
+      data: null,
+    }, 503);
   }
 });
 
@@ -426,7 +414,8 @@ marketRoutes.get('/orderbook/:symbol', async (c) => {
     const data = await res.json() as Record<string, { usd: number }>;
     const price = data[coinId]?.usd || 50000;
 
-    // Generate realistic orderbook around current price
+    // Generate deterministic orderbook around current price
+    // Note: CoinGecko doesn't provide orderbook data, so this is a model based on real price
     const bids: [number, number][] = [];
     const asks: [number, number][] = [];
     const step = price * 0.0005; // 0.05% steps
@@ -434,8 +423,10 @@ marketRoutes.get('/orderbook/:symbol', async (c) => {
     for (let i = 1; i <= 20; i++) {
       const bidPrice = parseFloat((price - step * i).toFixed(2));
       const askPrice = parseFloat((price + step * i).toFixed(2));
-      const bidSize = parseFloat((Math.random() * 2 + 0.1).toFixed(4));
-      const askSize = parseFloat((Math.random() * 2 + 0.1).toFixed(4));
+      // Deterministic size: increases with distance from mid (typical orderbook shape)
+      const baseSize = 0.5 + (i * 0.15);
+      const bidSize = parseFloat(baseSize.toFixed(4));
+      const askSize = parseFloat((baseSize * 0.95).toFixed(4));
       bids.push([bidPrice, bidSize]);
       asks.push([askPrice, askSize]);
     }

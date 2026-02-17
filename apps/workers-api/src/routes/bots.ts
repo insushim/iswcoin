@@ -79,10 +79,26 @@ botRoutes.get('/:id', async (c) => {
 });
 
 // 입력 검증 상수
-const VALID_STRATEGIES = ['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB'] as const;
+const VALID_STRATEGIES = ['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB', 'ENSEMBLE'] as const;
 const VALID_EXCHANGES = ['BINANCE', 'UPBIT', 'BYBIT', 'BITHUMB'] as const;
 const VALID_TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'] as const;
-const SYMBOL_REGEX = /^[A-Z0-9]{2,10}\/[A-Z0-9]{2,10}$/;
+// BTCUSDT (슬래시 없음) 및 BTC/USDT (슬래시 있음) 모두 허용
+const SYMBOL_REGEX = /^[A-Z0-9]{2,10}(\/[A-Z0-9]{2,10})?$/;
+
+// 심볼을 BASE/QUOTE 형식으로 정규화 (BTCUSDT → BTC/USDT)
+function normalizeSymbol(symbol: string): string {
+  if (symbol.includes('/')) return symbol;
+  // 알려진 quote 통화 매칭 (긴 것부터)
+  const quotes = ['USDT', 'BUSD', 'USDC', 'BTC', 'ETH', 'BNB', 'KRW'];
+  for (const q of quotes) {
+    if (symbol.endsWith(q) && symbol.length > q.length) {
+      return symbol.slice(0, -q.length) + '/' + q;
+    }
+  }
+  return symbol;
+}
+
+const ENSEMBLE_SUB_STRATEGIES = ['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB'] as const;
 
 // POST / - Create new bot
 botRoutes.post('/', async (c) => {
@@ -105,14 +121,36 @@ botRoutes.post('/', async (c) => {
     return c.json({ error: `Invalid exchange. Allowed: ${VALID_EXCHANGES.join(', ')}` }, 400);
   }
 
-  const symbol = String(body.symbol || 'BTC/USDT');
-  if (!SYMBOL_REGEX.test(symbol)) {
-    return c.json({ error: 'Invalid symbol format. Expected: BASE/QUOTE (e.g. BTC/USDT)' }, 400);
+  const rawSymbol = String(body.symbol || 'BTC/USDT').toUpperCase();
+  if (!SYMBOL_REGEX.test(rawSymbol)) {
+    return c.json({ error: 'Invalid symbol format. Expected: BTCUSDT or BTC/USDT' }, 400);
   }
+  const symbol = normalizeSymbol(rawSymbol);
 
   const timeframe = String(body.timeframe || '1h');
   if (!VALID_TIMEFRAMES.includes(timeframe as typeof VALID_TIMEFRAMES[number])) {
     return c.json({ error: `Invalid timeframe. Allowed: ${VALID_TIMEFRAMES.join(', ')}` }, 400);
+  }
+
+  // 앙상블 전략 검증
+  if (strategy === 'ENSEMBLE') {
+    const strategies = body.config?.strategies;
+    const weights = body.config?.weights;
+    if (!Array.isArray(strategies) || strategies.length < 2) {
+      return c.json({ error: 'ENSEMBLE requires at least 2 sub-strategies in config.strategies' }, 400);
+    }
+    for (const s of strategies) {
+      if (!ENSEMBLE_SUB_STRATEGIES.includes(s as typeof ENSEMBLE_SUB_STRATEGIES[number])) {
+        return c.json({ error: `Invalid sub-strategy: ${s}` }, 400);
+      }
+    }
+    if (weights && typeof weights === 'object') {
+      for (const w of Object.values(weights)) {
+        if (typeof w !== 'number' || w < 0 || w > 5) {
+          return c.json({ error: 'Strategy weights must be numbers between 0 and 5' }, 400);
+        }
+      }
+    }
   }
 
   const id = generateId();
@@ -167,10 +205,11 @@ botRoutes.put('/:id', async (c) => {
     updates.push('exchange = ?'); values.push(body.exchange);
   }
   if (body.symbol !== undefined) {
-    if (!SYMBOL_REGEX.test(String(body.symbol))) {
-      return c.json({ error: 'Invalid symbol format. Expected: BASE/QUOTE (e.g. BTC/USDT)' }, 400);
+    const rawSym = String(body.symbol).toUpperCase();
+    if (!SYMBOL_REGEX.test(rawSym)) {
+      return c.json({ error: 'Invalid symbol format. Expected: BTCUSDT or BTC/USDT' }, 400);
     }
-    updates.push('symbol = ?'); values.push(body.symbol);
+    updates.push('symbol = ?'); values.push(normalizeSymbol(rawSym));
   }
   if (body.timeframe !== undefined) {
     if (!VALID_TIMEFRAMES.includes(String(body.timeframe) as typeof VALID_TIMEFRAMES[number])) {

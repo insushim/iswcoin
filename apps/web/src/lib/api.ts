@@ -91,6 +91,9 @@ export const endpoints = {
     stop: (id: string) => `/bots/${id}/stop`,
     performance: (id: string) => `/bots/${id}/performance`,
     trades: (id: string, page = 1, limit = 20) => `/bots/${id}/trades?page=${page}&limit=${limit}`,
+    paperSummary: (id: string) => `/bots/${id}/paper/summary`,
+    paperLogs: (id: string, limit = 50, offset = 0) => `/bots/${id}/paper/logs?limit=${limit}&offset=${offset}`,
+    paperStats: (id: string) => `/bots/${id}/paper/stats`,
   },
   trades: {
     list: "/trades",

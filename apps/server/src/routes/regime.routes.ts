@@ -107,10 +107,12 @@ function generateFallbackRegime(symbol: string): {
     breakout: 'Watch for confirmation, use trailing stops',
   };
 
+  // 결정론적 confidence: 시간 기반 (랜덤 제거)
+  // 폴백이므로 낮은 confidence 값으로 고정
   return {
     symbol,
     regime,
-    confidence: 0.5 + Math.random() * 0.3,
+    confidence: 0.5,
     volatility,
     trend,
     recommendation: recommendations[regime] ?? 'Monitor market conditions',

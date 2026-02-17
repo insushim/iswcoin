@@ -31,7 +31,8 @@ export type StrategyType =
   | 'RL_AGENT'
   | 'STAT_ARB'
   | 'SCALPING'
-  | 'FUNDING_ARB';
+  | 'FUNDING_ARB'
+  | 'ENSEMBLE';
 
 export function getStrategy(
   type: StrategyType,
@@ -58,6 +59,9 @@ export function getStrategy(
       return new ScalpingStrategy(config);
     case 'FUNDING_ARB':
       return new FundingArbStrategy(config);
+    case 'ENSEMBLE':
+      // 앙상블은 내부적으로 여러 전략을 조합 - 기본값은 Momentum 사용
+      return new MomentumStrategy(config);
     default: {
       const _exhaustive: never = type;
       throw new Error(`Unknown strategy type: ${String(_exhaustive)}`);

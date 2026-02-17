@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { StrategyType } from "@cryptosentinel/shared";
 
@@ -17,6 +18,27 @@ interface ConfigField {
   defaultValue: number | string | boolean;
   helperText?: string;
 }
+
+// 앙상블에서 선택 가능한 서브 전략
+const ENSEMBLE_SUB_STRATEGIES = [
+  { value: "DCA", label: "적립식 매수 (DCA)" },
+  { value: "GRID", label: "그리드 트레이딩" },
+  { value: "MARTINGALE", label: "마틴게일" },
+  { value: "TRAILING", label: "트레일링 스탑" },
+  { value: "MOMENTUM", label: "모멘텀" },
+  { value: "MEAN_REVERSION", label: "평균 회귀" },
+  { value: "RL_AGENT", label: "RL 에이전트 (AI)" },
+  { value: "STAT_ARB", label: "통계적 차익거래" },
+  { value: "SCALPING", label: "스캘핑" },
+  { value: "FUNDING_ARB", label: "펀딩비 차익거래" },
+] as const;
+
+const ENSEMBLE_PRESETS: Record<string, { label: string; strategies: string[]; weights: Record<string, number> }> = {
+  stable: { label: "안정형 (횡보장 최적)", strategies: ["DCA", "MEAN_REVERSION", "GRID"], weights: { DCA: 1.2, MEAN_REVERSION: 1.0, GRID: 0.8 } },
+  aggressive: { label: "공격형 (추세장 최적)", strategies: ["MOMENTUM", "SCALPING", "TRAILING"], weights: { MOMENTUM: 1.2, SCALPING: 1.0, TRAILING: 0.8 } },
+  balanced: { label: "균형형 (전천후)", strategies: ["DCA", "MOMENTUM", "STAT_ARB"], weights: { DCA: 1.0, MOMENTUM: 1.0, STAT_ARB: 1.0 } },
+  ai: { label: "AI형 (데이터 기반)", strategies: ["RL_AGENT", "MEAN_REVERSION", "FUNDING_ARB"], weights: { RL_AGENT: 1.5, MEAN_REVERSION: 1.0, FUNDING_ARB: 0.8 } },
+};
 
 const STRATEGY_CONFIGS: Record<StrategyType, ConfigField[]> = {
   [StrategyType.DCA]: [
@@ -87,10 +109,15 @@ const STRATEGY_CONFIGS: Record<StrategyType, ConfigField[]> = {
     { key: "maxHoldingHours", label: "최대 보유 시간", type: "number", defaultValue: 72, helperText: "시간 단위" },
     { key: "minFundingCycles", label: "최소 펀딩 횟수", type: "number", defaultValue: 3, helperText: "최소 수취 주기 (8h × N)" },
   ],
+  [StrategyType.ENSEMBLE]: [
+    { key: "buyThreshold", label: "매수 임계값", type: "number", defaultValue: 1.5, helperText: "가중 투표 합산이 이 값 이상이면 매수" },
+    { key: "sellThreshold", label: "매도 임계값", type: "number", defaultValue: -1.5, helperText: "가중 투표 합산이 이 값 이하이면 매도" },
+  ],
 };
 
 export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
   const fields = STRATEGY_CONFIGS[strategy] || [];
+  const [selectedPreset, setSelectedPreset] = useState<string>("");
 
   const handleFieldChange = (key: string, value: string, type: string) => {
     let parsedValue: number | string | boolean;
@@ -104,6 +131,139 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
     }
     onChange({ ...config, [key]: parsedValue });
   };
+
+  // 앙상블 전략: 서브 전략 토글
+  const toggleSubStrategy = (strat: string) => {
+    const current = (config.strategies as unknown as string[]) || [];
+    const weights = (config.weights as unknown as Record<string, number>) || {};
+    if (current.includes(strat)) {
+      const next = current.filter((s) => s !== strat);
+      const { [strat]: _, ...restWeights } = weights;
+      onChange({ ...config, strategies: next as never, weights: restWeights as never });
+    } else {
+      onChange({ ...config, strategies: [...current, strat] as never, weights: { ...weights, [strat]: 1.0 } as never });
+    }
+    setSelectedPreset("");
+  };
+
+  // 앙상블 전략: 가중치 변경
+  const changeWeight = (strat: string, value: number) => {
+    const weights = (config.weights as unknown as Record<string, number>) || {};
+    onChange({ ...config, weights: { ...weights, [strat]: value } as never });
+  };
+
+  // 앙상블 프리셋 적용
+  const applyPreset = (presetKey: string) => {
+    const preset = ENSEMBLE_PRESETS[presetKey];
+    if (!preset) return;
+    setSelectedPreset(presetKey);
+    onChange({
+      ...config,
+      strategies: preset.strategies as never,
+      weights: preset.weights as never,
+    });
+  };
+
+  // 앙상블 전용 UI
+  if (strategy === StrategyType.ENSEMBLE) {
+    const selectedStrategies = (config.strategies as unknown as string[]) || [];
+    const weights = (config.weights as unknown as Record<string, number>) || {};
+
+    return (
+      <div className="space-y-5">
+        <h4 className="text-sm font-medium text-slate-300">앙상블 전략 설정</h4>
+
+        {/* 프리셋 */}
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-slate-400">추천 조합 (프리셋)</label>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(ENSEMBLE_PRESETS).map(([key, preset]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => applyPreset(key)}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
+                  selectedPreset === key
+                    ? "border-blue-500 bg-blue-500/20 text-blue-400"
+                    : "border-slate-700 text-slate-400 hover:border-slate-600 hover:text-slate-300"
+                }`}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 서브 전략 선택 */}
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-slate-400">전략 선택 (2개 이상)</label>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {ENSEMBLE_SUB_STRATEGIES.map((s) => {
+              const isSelected = selectedStrategies.includes(s.value);
+              return (
+                <button
+                  key={s.value}
+                  type="button"
+                  onClick={() => toggleSubStrategy(s.value)}
+                  className={`rounded-lg border px-3 py-2 text-left text-xs font-medium transition-all ${
+                    isSelected
+                      ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-400"
+                      : "border-slate-700 text-slate-400 hover:border-slate-600 hover:text-slate-300"
+                  }`}
+                >
+                  {isSelected ? "✓ " : ""}{s.label}
+                </button>
+              );
+            })}
+          </div>
+          {selectedStrategies.length > 0 && selectedStrategies.length < 2 && (
+            <p className="text-xs text-amber-400">최소 2개 전략을 선택해주세요</p>
+          )}
+        </div>
+
+        {/* 가중치 슬라이더 */}
+        {selectedStrategies.length >= 2 && (
+          <div className="space-y-3">
+            <label className="block text-xs font-medium text-slate-400">전략별 가중치</label>
+            {selectedStrategies.map((strat) => {
+              const label = ENSEMBLE_SUB_STRATEGIES.find((s) => s.value === strat)?.label || strat;
+              const w = weights[strat] ?? 1.0;
+              return (
+                <div key={strat} className="flex items-center gap-3">
+                  <span className="w-28 text-xs text-slate-300 truncate">{label}</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={w}
+                    onChange={(e) => changeWeight(strat, parseFloat(e.target.value))}
+                    className="flex-1 accent-emerald-500"
+                  />
+                  <span className="w-10 text-right text-xs font-mono text-slate-400">{w.toFixed(1)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 임계값 설정 */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {fields.map((field) => (
+            <Input
+              key={field.key}
+              label={field.label}
+              type="number"
+              helperText={field.helperText}
+              value={String(config[field.key] ?? field.defaultValue)}
+              step="any"
+              onChange={(e) => handleFieldChange(field.key, e.target.value, field.type)}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -137,5 +297,11 @@ export function getDefaultConfig(strategy: StrategyType): Record<string, number 
   fields.forEach((f) => {
     config[f.key] = f.defaultValue;
   });
+  // 앙상블 기본값: 균형형 프리셋
+  if (strategy === StrategyType.ENSEMBLE) {
+    const preset = ENSEMBLE_PRESETS.balanced;
+    (config as Record<string, unknown>).strategies = preset.strategies;
+    (config as Record<string, unknown>).weights = preset.weights;
+  }
   return config;
 }

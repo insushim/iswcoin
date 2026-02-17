@@ -33,6 +33,7 @@ const strategyLabels: Record<string, string> = {
   STAT_ARB: "통계적 차익거래",
   SCALPING: "스캘핑",
   FUNDING_ARB: "펀딩비 차익거래",
+  ENSEMBLE: "앙상블 (멀티 전략)",
 };
 
 const strategyOptions = Object.values(StrategyType).map((v) => ({

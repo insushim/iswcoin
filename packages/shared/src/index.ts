@@ -34,6 +34,7 @@ export enum StrategyType {
   STAT_ARB = "STAT_ARB",
   SCALPING = "SCALPING",
   FUNDING_ARB = "FUNDING_ARB",
+  ENSEMBLE = "ENSEMBLE",
 }
 
 export enum MarketRegime {
@@ -182,6 +183,55 @@ export interface WSEvents {
   "alert:new": { type: AlertType; message: string; severity: "info" | "warning" | "critical" };
   "portfolio:update": PortfolioSummary;
   "regime:change": RegimeState;
+}
+
+// ===== Paper Trading =====
+export interface PaperTradeSummary {
+  balance: number;
+  initialBalance: number;
+  totalPnl: number;
+  totalPnlPct: number;
+  netPnl: number;
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  sharpeRatio: number;
+  maxDrawdown: number;
+  maxDrawdownPct: number;
+  profitFactor: number;
+  avgWin: number;
+  avgLoss: number;
+  equityCurve: { date: string; value: number }[];
+  dailyPnl: { date: string; pnl: number }[];
+}
+
+export interface PaperTradeLogEntry {
+  botId: string;
+  timestamp: number;
+  signal: {
+    action: string;
+    confidence: number;
+    reason: string;
+    price: number;
+    stopLoss?: number;
+    takeProfit?: number;
+  };
+  execution: {
+    fillPrice: number;
+    amount: number;
+    side: 'buy' | 'sell';
+    fee: number;
+  } | null;
+  position: {
+    isOpen: boolean;
+    side: 'long' | 'short' | null;
+    entryPrice: number;
+    amount: number;
+    unrealizedPnl: number;
+    unrealizedPnlPct: number;
+  } | null;
+  paperBalance: number;
 }
 
 // ===== API Response =====

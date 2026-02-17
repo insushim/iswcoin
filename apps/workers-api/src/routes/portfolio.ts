@@ -88,42 +88,56 @@ portfolioRoutes.get('/summary', async (c) => {
   });
 });
 
-// GET /history - Portfolio value history
+// GET /history - Portfolio value history (실제 거래 기반)
 portfolioRoutes.get('/history', async (c) => {
   const userId = c.get('userId');
   const days = parseInt(c.req.query('days') || '30');
 
-  // Try to get real data from portfolio table
+  // Get current portfolio value
   const portfolio = await c.env.DB.prepare(
     'SELECT total_value FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1'
   ).bind(userId).first<{ total_value: number }>();
-
   const currentValue = portfolio?.total_value || 10000;
 
-  // Generate history data based on current portfolio value
-  // Simulate realistic portfolio growth with daily fluctuations
+  // Fetch actual trades to build real portfolio history
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  const tradesResult = await c.env.DB.prepare(
+    `SELECT pnl, closed_at FROM trades WHERE user_id = ? AND status = 'CLOSED' AND closed_at >= ? ORDER BY closed_at ASC`
+  ).bind(userId, cutoff).all();
+
+  const trades = (tradesResult.results || []) as Array<{ pnl: number; closed_at: string }>;
+
+  // Group trades by date and calculate daily PnL
+  const dailyPnl = new Map<string, number>();
+  for (const t of trades) {
+    const date = t.closed_at.split('T')[0];
+    dailyPnl.set(date, (dailyPnl.get(date) || 0) + (t.pnl || 0));
+  }
+
+  // Build history: start from (currentValue - totalPnl) and add daily PnL
+  const totalPnl = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const startValue = currentValue - totalPnl;
+
   const history: Array<{ date: string; value: number; pnl: number }> = [];
   const now = new Date();
-  let value = currentValue * 0.92; // Start ~8% lower than current
+  let runningValue = startValue;
 
   for (let i = days; i >= 0; i--) {
     const date = new Date(now.getTime() - i * 86400000);
+    const dateStr = date.toISOString().split('T')[0];
+    const dayPnl = dailyPnl.get(dateStr) || 0;
+    runningValue += dayPnl;
 
-    // Simulate daily change between -2% and +3%
-    const dailyReturn = (Math.random() - 0.4) * 0.025;
-    value = value * (1 + dailyReturn);
-
-    // Ensure we end close to current value on the last day
-    if (i === 0) {
-      value = currentValue;
-    }
-
-    const prevValue = history.length > 0 ? history[history.length - 1].value : value;
     history.push({
       date: date.toISOString(),
-      value: parseFloat(value.toFixed(2)),
-      pnl: parseFloat((value - prevValue).toFixed(2)),
+      value: parseFloat(runningValue.toFixed(2)),
+      pnl: parseFloat(dayPnl.toFixed(2)),
     });
+  }
+
+  // Adjust last entry to match current value (account for open positions)
+  if (history.length > 0) {
+    history[history.length - 1].value = currentValue;
   }
 
   return c.json({ data: history });

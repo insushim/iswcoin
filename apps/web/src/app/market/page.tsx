@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { PriceChart } from "@/components/charts/price-chart";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -9,6 +9,7 @@ import { cn, formatCurrency, formatPercent, formatNumber } from "@/lib/utils";
 import { useMarketStore } from "@/stores/market.store";
 import { Timeframe } from "@cryptosentinel/shared";
 import type { Time } from "lightweight-charts";
+import api, { endpoints } from "@/lib/api";
 import {
   TrendingUp,
   TrendingDown,
@@ -16,27 +17,6 @@ import {
   BarChart3,
   Gauge,
 } from "lucide-react";
-
-// Generate demo OHLCV data
-function generateDemoOHLCV(days: number = 90) {
-  const data = [];
-  let price = 95000;
-  const now = Math.floor(Date.now() / 1000);
-
-  for (let i = days; i >= 0; i--) {
-    const time = (now - i * 86400) as Time;
-    const open = price;
-    const change = (Math.random() - 0.48) * 3000;
-    const close = open + change;
-    const high = Math.max(open, close) + Math.random() * 1500;
-    const low = Math.min(open, close) - Math.random() * 1500;
-    const volume = 15000 + Math.random() * 30000;
-
-    data.push({ time, open, high, low, close, volume });
-    price = close;
-  }
-  return data;
-}
 
 const SYMBOL_OPTIONS = [
   { label: "BTC/USDT", value: "BTCUSDT" },
@@ -54,36 +34,63 @@ const TIMEFRAME_OPTIONS = Object.values(Timeframe).map((t) => ({
 export default function MarketPage() {
   const { selectedSymbol, setSelectedSymbol, indicators, sentiment, fetchIndicators, fetchSentiment } = useMarketStore();
   const [timeframe, setTimeframe] = useState(Timeframe.D1);
-  const [isDemo, setIsDemo] = useState(true);
+  const [isDemo, setIsDemo] = useState(false);
+  const [chartData, setChartData] = useState<Array<{ time: Time; open: number; high: number; low: number; close: number; volume: number }>>([]);
+  const [chartLoading, setChartLoading] = useState(true);
 
-  const chartData = useMemo(() => generateDemoOHLCV(90), []);
+  const fetchOHLCV = useCallback(async (symbol: string) => {
+    setChartLoading(true);
+    try {
+      const res = await api.get(endpoints.market.ohlcv(symbol), { params: { days: 90 } });
+      const raw = res.data.data ?? res.data;
+      if (Array.isArray(raw) && raw.length > 0) {
+        const formatted = raw.map((candle: { timestamp: number; open: number; high: number; low: number; close: number; volume?: number }) => ({
+          time: Math.floor(candle.timestamp / 1000) as Time,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+          volume: candle.volume || 0,
+        }));
+        setChartData(formatted);
+        setIsDemo(false);
+      } else {
+        setChartData([]);
+        setIsDemo(true);
+      }
+    } catch {
+      setChartData([]);
+      setIsDemo(true);
+    } finally {
+      setChartLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetchIndicators(selectedSymbol)
-      .then(() => setIsDemo(false))
-      .catch(() => setIsDemo(true));
+    fetchOHLCV(selectedSymbol);
+    fetchIndicators(selectedSymbol).catch(() => {});
     fetchSentiment().catch(() => {});
-  }, [selectedSymbol, fetchIndicators, fetchSentiment]);
+  }, [selectedSymbol, fetchOHLCV, fetchIndicators, fetchSentiment]);
 
-  // Demo indicators
+  // API 데이터 또는 빈 폴백 (가짜 수치 제거)
   const demoIndicators = indicators || {
-    rsi: 58.3,
-    macd: { line: 245.5, signal: 198.3, histogram: 47.2 },
-    bollingerBands: { upper: 99500, middle: 97000, lower: 94500 },
-    ema20: 96800,
-    ema50: 95200,
-    ema200: 88500,
-    atr: 2340,
-    volume24h: 28543000000,
-    volumeChange: 12.5,
+    rsi: 0,
+    macd: { line: 0, signal: 0, histogram: 0 },
+    bollingerBands: { upper: 0, middle: 0, lower: 0 },
+    ema20: 0,
+    ema50: 0,
+    ema200: 0,
+    atr: 0,
+    volume24h: 0,
+    volumeChange: 0,
   };
 
   const demoSentiment = sentiment || {
-    fearGreedIndex: 62,
-    fearGreedLabel: "탐욕",
-    socialScore: 72,
-    newsScore: 58,
-    whaleActivity: "축적 중",
+    fearGreedIndex: 0,
+    fearGreedLabel: "데이터 없음",
+    socialScore: 0,
+    newsScore: 0,
+    whaleActivity: "데이터 없음",
     timestamp: Date.now(),
   };
 
@@ -115,7 +122,7 @@ export default function MarketPage() {
 
       {isDemo && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-400">
-          서버에 연결되지 않아 데모 데이터를 표시 중입니다. 실제 시세와 다를 수 있습니다.
+          서버에 연결되지 않아 차트 데이터를 불러올 수 없습니다.
         </div>
       )}
 
@@ -124,7 +131,17 @@ export default function MarketPage() {
         <CardHeader>
           {selectedSymbol.replace("USDT", "/USDT")} - {timeframe}
         </CardHeader>
-        <PriceChart data={chartData} height={500} />
+        {chartLoading ? (
+          <div className="flex h-[500px] items-center justify-center text-slate-400">
+            차트 데이터 로딩 중...
+          </div>
+        ) : chartData.length > 0 ? (
+          <PriceChart data={chartData} height={500} />
+        ) : (
+          <div className="flex h-[500px] items-center justify-center text-slate-500">
+            차트 데이터를 불러올 수 없습니다
+          </div>
+        )}
       </Card>
 
       {/* Indicators + Sentiment */}

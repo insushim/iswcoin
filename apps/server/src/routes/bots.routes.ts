@@ -12,7 +12,7 @@ const createBotSchema = z.object({
   name: z.string().min(1).max(100),
   symbol: z.string().min(1),
   exchange: z.enum(['BINANCE', 'UPBIT', 'BYBIT', 'BITHUMB']),
-  strategy: z.enum(['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB']),
+  strategy: z.enum(['DCA', 'GRID', 'MARTINGALE', 'TRAILING', 'MOMENTUM', 'MEAN_REVERSION', 'RL_AGENT', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB', 'ENSEMBLE']),
   mode: z.enum(['PAPER', 'REAL']).default('PAPER'),
   config: z.record(z.number()).optional(),
   riskConfig: z.record(z.number()).optional(),
@@ -405,6 +405,81 @@ router.get('/:id/trades', async (req: AuthenticatedRequest, res: Response): Prom
   } catch (err) {
     logger.error('Failed to fetch bot trades', { error: String(err) });
     res.status(500).json({ error: 'Failed to fetch bot trades' });
+  }
+});
+
+// ─── Paper Trading API ──────────────────────────────────
+
+router.get('/:id/paper/summary', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const id = req.params['id'];
+
+    const bot = await prisma.bot.findFirst({
+      where: { id, userId },
+    });
+    if (!bot) {
+      res.status(404).json({ error: '봇을 찾을 수 없습니다' });
+      return;
+    }
+    if (bot.mode !== 'PAPER') {
+      res.status(400).json({ error: 'PAPER 모드 봇만 조회 가능합니다' });
+      return;
+    }
+
+    const summary = botRunnerService.getPaperTradeSummary(id);
+    res.json({ summary });
+  } catch (err) {
+    logger.error('Failed to fetch paper summary', { error: String(err) });
+    res.status(500).json({ error: '모의 투자 요약 조회 실패' });
+  }
+});
+
+router.get('/:id/paper/logs', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const id = req.params['id'];
+    const limit = Math.min(parseInt(req.query['limit'] as string) || 50, 200);
+    const offset = parseInt(req.query['offset'] as string) || 0;
+
+    const bot = await prisma.bot.findFirst({
+      where: { id, userId },
+    });
+    if (!bot) {
+      res.status(404).json({ error: '봇을 찾을 수 없습니다' });
+      return;
+    }
+
+    const allLogs = botRunnerService.getPaperTradeLogs(id);
+    // 최신순 정렬 후 페이지네이션
+    const sorted = [...allLogs].reverse();
+    const logs = sorted.slice(offset, offset + limit);
+
+    res.json({ logs, total: allLogs.length });
+  } catch (err) {
+    logger.error('Failed to fetch paper logs', { error: String(err) });
+    res.status(500).json({ error: '모의 투자 로그 조회 실패' });
+  }
+});
+
+router.get('/:id/paper/stats', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const id = req.params['id'];
+
+    const bot = await prisma.bot.findFirst({
+      where: { id, userId },
+    });
+    if (!bot) {
+      res.status(404).json({ error: '봇을 찾을 수 없습니다' });
+      return;
+    }
+
+    const stats = botRunnerService.getPaperTradeStats(id);
+    res.json({ stats });
+  } catch (err) {
+    logger.error('Failed to fetch paper stats', { error: String(err) });
+    res.status(500).json({ error: '모의 투자 통계 조회 실패' });
   }
 });
 

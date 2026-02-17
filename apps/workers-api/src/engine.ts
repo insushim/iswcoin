@@ -30,6 +30,7 @@ const MIN_INTERVAL: Record<string, number> = {
   STAT_ARB: 900000,       // 15 min
   FUNDING_ARB: 3600000,   // 60 min
   RL_AGENT: 900000,       // 15 min
+  ENSEMBLE: 600000,       // 10 min
 };
 
 // ============ Types ============
@@ -60,25 +61,51 @@ interface Indicators {
 
 // ============ Price Fetching ============
 
-async function fetchCurrentPrices(symbols: string[]): Promise<Record<string, number>> {
+async function fetchCurrentPrices(symbols: string[], db?: D1Database): Promise<Record<string, number>> {
   const prices: Record<string, number> = {};
   const ids = symbols.map(s => COIN_MAP[s]).filter(Boolean);
-  if (ids.length === 0) {
-    for (const s of symbols) if (FALLBACK[s]) prices[s] = FALLBACK[s] * (1 + (Math.random() - 0.5) * 0.004);
-    return prices;
-  }
-  try {
-    const res = await fetch(`${CG}/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true`,
-      { headers: { Accept: 'application/json', 'User-Agent': 'CryptoSentinel/2.0' } });
-    if (!res.ok) throw new Error(`${res.status}`);
-    const data = await res.json() as Record<string, { usd: number }>;
-    for (const s of symbols) {
-      const cid = COIN_MAP[s];
-      prices[s] = (cid && data[cid]?.usd) ? data[cid].usd : (FALLBACK[s] || 0) * (1 + (Math.random() - 0.5) * 0.004);
+
+  // Try CoinGecko first
+  if (ids.length > 0) {
+    try {
+      const res = await fetch(`${CG}/simple/price?ids=${ids.join(',')}&vs_currencies=usd&include_24hr_change=true`,
+        { headers: { Accept: 'application/json', 'User-Agent': 'CryptoSentinel/2.0' } });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const data = await res.json() as Record<string, { usd: number }>;
+      for (const s of symbols) {
+        const cid = COIN_MAP[s];
+        if (cid && data[cid]?.usd) prices[s] = data[cid].usd;
+      }
+    } catch {
+      console.log('[Engine] CoinGecko API 실패, DB 캐시 사용 시도');
     }
-  } catch {
-    for (const s of symbols) if (FALLBACK[s]) prices[s] = FALLBACK[s] * (1 + (Math.random() - 0.5) * 0.004);
   }
+
+  // For symbols without prices, try last trade price from DB
+  const missing = symbols.filter(s => !prices[s]);
+  if (missing.length > 0 && db) {
+    for (const s of missing) {
+      try {
+        const row = await db.prepare(
+          "SELECT entry_price FROM trades WHERE symbol = ? AND status = 'CLOSED' ORDER BY closed_at DESC LIMIT 1"
+        ).bind(s.replace('/', '')).first<{ entry_price: number }>();
+        if (row?.entry_price) {
+          prices[s] = row.entry_price;
+          console.log(`[Engine] ${s}: DB 캐시 가격 사용 ($${row.entry_price})`);
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  // Last resort: use FALLBACK WITHOUT random noise (clearly marked)
+  const stillMissing = symbols.filter(s => !prices[s]);
+  for (const s of stillMissing) {
+    if (FALLBACK[s]) {
+      prices[s] = FALLBACK[s];
+      console.log(`[Engine] ⚠️ ${s}: 하드코딩 폴백 가격 사용 ($${FALLBACK[s]}) - 거래 건너뜀 권장`);
+    }
+  }
+
   return prices;
 }
 
@@ -686,6 +713,116 @@ function strategyRLAgent(price: number, ind: Indicators, pos: Position | undefin
   return null;
 }
 
+// 11. ENSEMBLE - 가중 투표 앙상블 전략
+function strategyEnsemble(
+  price: number, ind: Indicators, pos: Position | undefined, cash: number,
+  config: Record<string, unknown>, state: Record<string, unknown>
+): { signal: TradeSignal | null; newState: Record<string, unknown> } {
+  const strategies = (config.strategies as string[]) || [];
+  const weights = (config.weights as Record<string, number>) || {};
+  const buyThreshold = Number(config.buyThreshold || 1.5);
+  const sellThreshold = Number(config.sellThreshold || -1.5);
+
+  if (strategies.length < 2) return { signal: null, newState: state };
+
+  let buyVotes = 0;
+  let sellVotes = 0;
+  let maxBuySize = 0;
+  let maxSellSize = 0;
+  const reasons: string[] = [];
+  let updatedState = { ...state };
+
+  for (const strat of strategies) {
+    const w = weights[strat] ?? 1.0;
+    let subSignal: TradeSignal | null = null;
+    let subState = state;
+
+    switch (strat) {
+      case 'DCA':
+        subSignal = strategyDCA(price, ind, pos, cash, config);
+        break;
+      case 'GRID': {
+        const r = strategyGrid(price, ind, pos, cash, config, state);
+        subSignal = r.signal; subState = r.newState;
+        break;
+      }
+      case 'MOMENTUM': {
+        const r = strategyMomentum(price, ind, pos, cash, config, state);
+        subSignal = r.signal; subState = r.newState;
+        break;
+      }
+      case 'MEAN_REVERSION':
+        subSignal = strategyMeanReversion(price, ind, pos, cash, config);
+        break;
+      case 'TRAILING': {
+        const r = strategyTrailing(price, ind, pos, cash, config, state);
+        subSignal = r.signal; subState = r.newState;
+        break;
+      }
+      case 'MARTINGALE': {
+        const r = strategyMartingale(price, ind, pos, cash, config, state);
+        subSignal = r.signal; subState = r.newState;
+        break;
+      }
+      case 'SCALPING':
+        subSignal = strategyScalping(price, ind, pos, cash, config);
+        break;
+      case 'STAT_ARB':
+        subSignal = strategyStatArb(price, ind, pos, cash, config);
+        break;
+      case 'FUNDING_ARB':
+        subSignal = strategyFundingArb(price, ind, pos, cash, config);
+        break;
+      case 'RL_AGENT':
+        subSignal = strategyRLAgent(price, ind, pos, cash, config);
+        break;
+    }
+
+    if (subSignal) {
+      if (subSignal.side === 'BUY') {
+        buyVotes += w;
+        if (subSignal.cost > maxBuySize) maxBuySize = subSignal.cost;
+        reasons.push(`${strat}:BUY(w${w})`);
+      } else {
+        sellVotes += w;
+        if (subSignal.quantity > maxSellSize) maxSellSize = subSignal.quantity;
+        reasons.push(`${strat}:SELL(w${w})`);
+      }
+    }
+
+    // 상태 가능한 전략 결과 병합
+    if (subState !== state) {
+      updatedState = { ...updatedState, [`_${strat}`]: subState };
+    }
+  }
+
+  const totalWeight = strategies.reduce((sum, s) => sum + (weights[s] ?? 1.0), 0);
+  const normalizedBuy = totalWeight > 0 ? (buyVotes / totalWeight) * strategies.length : buyVotes;
+  const normalizedSell = totalWeight > 0 ? (-sellVotes / totalWeight) * strategies.length : -sellVotes;
+
+  let signal: TradeSignal | null = null;
+
+  if (normalizedBuy >= buyThreshold && maxBuySize > 0) {
+    // 가중 평균 크기 계산 (최대 크기의 60~100%)
+    const sizeRatio = Math.min(1.0, 0.6 + (normalizedBuy - buyThreshold) * 0.2);
+    const cost = maxBuySize * sizeRatio;
+    if (cost >= 30 && cash >= cost) {
+      signal = {
+        side: 'BUY', quantity: cost / price, cost,
+        reason: `앙상블 매수 (${reasons.join(', ')}, 점수 ${normalizedBuy.toFixed(1)})`
+      };
+    }
+  } else if (normalizedSell <= sellThreshold && maxSellSize > 0 && pos && pos.amount > 0) {
+    const sellQty = Math.min(maxSellSize, pos.amount);
+    signal = {
+      side: 'SELL', quantity: sellQty, cost: sellQty * price,
+      reason: `앙상블 매도 (${reasons.join(', ')}, 점수 ${normalizedSell.toFixed(1)})`
+    };
+  }
+
+  return { signal, newState: updatedState };
+}
+
 // ============ Main Engine ============
 
 export async function runPaperTrading(env: Env): Promise<string[]> {
@@ -702,8 +839,8 @@ export async function runPaperTrading(env: Env): Promise<string[]> {
   // 2. Collect unique symbols
   const symbols = [...new Set(bots.map(b => b.symbol.replace('/', '')))];
 
-  // 3. Fetch current prices
-  const prices = await fetchCurrentPrices(symbols);
+  // 3. Fetch current prices (DB 캐시 폴백 포함)
+  const prices = await fetchCurrentPrices(symbols, db);
   log(`가격: ${Object.entries(prices).map(([s, p]) => `${s}=$${p.toFixed(2)}`).join(', ')}`);
 
   // Wait 2s before fetching history to avoid CoinGecko rate limit
@@ -789,6 +926,11 @@ export async function runPaperTrading(env: Env): Promise<string[]> {
           case 'RL_AGENT':
             signal = strategyRLAgent(price, ind, pos, cash, config);
             break;
+          case 'ENSEMBLE': {
+            const r = strategyEnsemble(price, ind, pos, cash, config, state);
+            signal = r.signal; newState = r.newState;
+            break;
+          }
           default:
             signal = strategyMomentum(price, ind, pos, cash, config, state).signal;
         }

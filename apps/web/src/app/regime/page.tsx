@@ -42,18 +42,11 @@ const REGIME_STRATEGIES: Record<MarketRegime, string[]> = {
   [MarketRegime.BEAR_LOW_VOL]: ["분할 매수", "적립식 매수", "스테이블코인 수익"],
 };
 
-// Demo data
-const DEMO_REGIME: RegimeData = {
-  current: MarketRegime.BULL_HIGH_VOL,
-  probability: 0.78,
-  history: Array.from({ length: 60 }, (_, i) => {
-    const regimes = Object.values(MarketRegime);
-    const idx = Math.floor(i / 15) % regimes.length;
-    return {
-      date: new Date(Date.now() - (59 - i) * 86400000).toISOString(),
-      regime: regimes[idx],
-    };
-  }),
+// 빈 폴백 (가짜 데이터 제거)
+const EMPTY_REGIME: RegimeData = {
+  current: MarketRegime.BEAR_LOW_VOL,
+  probability: 0,
+  history: [],
 };
 
 // Transition matrix probabilities
@@ -77,14 +70,14 @@ export default function RegimePage() {
         setRegime(res.data.data);
         setIsDemo(false);
       } catch {
-        setRegime(DEMO_REGIME);
+        setRegime(EMPTY_REGIME);
         setIsDemo(true);
       }
     }
     fetchRegime();
   }, []);
 
-  const data = regime || DEMO_REGIME;
+  const data = regime || EMPTY_REGIME;
   const currentColors = REGIME_COLORS[data.current];
   const recommendedStrategies = REGIME_STRATEGIES[data.current];
 
@@ -92,7 +85,7 @@ export default function RegimePage() {
     <div className="space-y-6 animate-fade-in">
       {isDemo && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-400">
-          서버에 연결되지 않아 데모 데이터를 표시 중입니다. 실제 시장 국면과 다를 수 있습니다.
+          서버에 연결되지 않아 시장 국면 데이터를 불러올 수 없습니다.
         </div>
       )}
 
