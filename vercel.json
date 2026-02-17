@@ -1,0 +1,6 @@
+{
+  "buildCommand": "pnpm --filter @cryptosentinel/shared build && pnpm --filter @cryptosentinel/web build",
+  "outputDirectory": "apps/web/out",
+  "installCommand": "pnpm install",
+  "framework": null
+}
