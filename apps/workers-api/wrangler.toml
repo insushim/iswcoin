@@ -4,7 +4,7 @@ compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-CORS_ORIGIN = "https://web-orpin-zeta.vercel.app"
+CORS_ORIGIN = "https://cryptosentinel-web-8cw.pages.dev"
 
 # JWT_SECRET은 Wrangler secrets로 관리 (wrangler secret put JWT_SECRET)
 # ENGINE_SECRET은 엔진 수동 실행 보호 (wrangler secret put ENGINE_SECRET)

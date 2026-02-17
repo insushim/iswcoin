@@ -45,8 +45,8 @@ function checkRateLimit(ip: string, limit: number, windowMs: number): boolean {
 app.use('*', async (c, next) => {
   const allowed = [
     c.env.CORS_ORIGIN,
+    'https://cryptosentinel-web-8cw.pages.dev',
     'https://web-orpin-zeta.vercel.app',
-    'https://cryptosentinel-web.pages.dev',
     'http://localhost:3000',
     'http://localhost:3001',
   ].filter(Boolean);
