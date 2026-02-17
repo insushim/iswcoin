@@ -7,8 +7,8 @@ const nextConfig = {
     unoptimized: true,
   },
   env: {
-    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "https://cryptosentinel-api.simssijjang.workers.dev",
-    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || "https://cryptosentinel-api.simssijjang.workers.dev",
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "https://cryptosentinel-api.simssijjang-d79.workers.dev",
+    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || "https://cryptosentinel-api.simssijjang-d79.workers.dev",
   },
   trailingSlash: true,
   // 성능 최적화
@@ -37,7 +37,7 @@ const nextConfig = {
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data: https:",
             "font-src 'self' https://fonts.gstatic.com",
-            `connect-src 'self' ${process.env.NEXT_PUBLIC_API_URL || "https://cryptosentinel-api.simssijjang.workers.dev"}`,
+            `connect-src 'self' ${process.env.NEXT_PUBLIC_API_URL || "https://cryptosentinel-api.simssijjang-d79.workers.dev"}`,
           ].join("; "),
         },
       ],
