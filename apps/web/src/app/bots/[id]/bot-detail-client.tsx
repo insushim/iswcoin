@@ -7,6 +7,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageLoader } from "@/components/ui/loading";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { getBotStatusVariant, getBotStatusLabel } from "@/lib/bot-helpers";
+import {
+  mapBotDetail,
+  mapPerformance,
+  mapTrade,
+  type BotDetail,
+  type BotPerformance,
+  type Trade,
+} from "@/lib/mappers";
 import api, { endpoints } from "@/lib/api";
 import {
   ArrowLeft,
@@ -19,123 +28,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 
-interface BotDetail {
-  id: string;
-  name: string;
-  symbol: string;
-  exchange: string;
-  strategy: string;
-  mode: string;
-  status: string;
-  config: Record<string, unknown>;
-  createdAt: string;
-}
-
-interface BotPerformance {
-  totalTrades: number;
-  wins: number;
-  losses: number;
-  totalPnl: number;
-  totalFees: number;
-  winRate: number;
-  maxDrawdown: number;
-  netPnl: number;
-}
-
-interface Trade {
-  id: string;
-  side: string;
-  price: number;
-  amount: number;
-  pnl: number | null;
-  fee: number | null;
-  createdAt: string;
-}
-
 const TRADES_PER_PAGE = 20;
-
-function mapBotDetail(raw: Record<string, unknown>): BotDetail {
-  return {
-    id: (raw.id as string) || "",
-    name: (raw.name as string) || "",
-    symbol: ((raw.symbol as string) || "").replace("/", ""),
-    exchange: ((raw.exchange as string) || "").toUpperCase(),
-    strategy: (raw.strategy as string) || "",
-    mode: (raw.mode as string) || (raw.trading_mode as string) || "PAPER",
-    status: (raw.status as string) || "STOPPED",
-    config:
-      typeof raw.config === "string"
-        ? (() => {
-            try {
-              return JSON.parse(raw.config as string);
-            } catch {
-              return {};
-            }
-          })()
-        : (raw.config as Record<string, unknown>) || {},
-    createdAt:
-      (raw.createdAt as string) ||
-      (raw.created_at as string) ||
-      new Date().toISOString(),
-  };
-}
-
-function mapPerformance(raw: Record<string, unknown>): BotPerformance {
-  return {
-    totalTrades: Number(raw.totalTrades ?? raw.total_trades ?? 0),
-    wins: Number(raw.wins ?? 0),
-    losses: Number(raw.losses ?? 0),
-    totalPnl: Number(raw.totalPnl ?? raw.total_pnl ?? 0),
-    totalFees: Number(raw.totalFees ?? raw.total_fees ?? 0),
-    winRate: Number(raw.winRate ?? raw.win_rate ?? 0),
-    maxDrawdown: Number(raw.maxDrawdown ?? raw.max_drawdown ?? 0),
-    netPnl: Number(raw.netPnl ?? raw.net_pnl ?? 0),
-  };
-}
-
-function mapTrade(raw: Record<string, unknown>): Trade {
-  return {
-    id: (raw.id as string) || "",
-    side: (raw.side as string) || "BUY",
-    price: Number(raw.entry_price ?? raw.entryPrice ?? raw.price ?? 0),
-    amount: Number(raw.quantity ?? raw.amount ?? 0),
-    pnl: raw.pnl != null ? Number(raw.pnl) : null,
-    fee: raw.fee != null ? Number(raw.fee) : null,
-    createdAt:
-      (raw.createdAt as string) ||
-      (raw.created_at as string) ||
-      (raw.timestamp as string) ||
-      new Date().toISOString(),
-  };
-}
-
-function statusBadgeVariant(status: string) {
-  switch (status) {
-    case "RUNNING":
-      return "running" as const;
-    case "ERROR":
-      return "error" as const;
-    case "IDLE":
-      return "idle" as const;
-    default:
-      return "stopped" as const;
-  }
-}
-
-function statusLabel(status: string) {
-  switch (status) {
-    case "RUNNING":
-      return "실행 중";
-    case "STOPPED":
-      return "중지됨";
-    case "ERROR":
-      return "오류";
-    case "IDLE":
-      return "대기 중";
-    default:
-      return status;
-  }
-}
 
 export default function BotDetailClient() {
   const params = useParams();
@@ -304,8 +197,8 @@ export default function BotDetailClient() {
           <Badge variant={bot.mode === "PAPER" ? "info" : "warning"}>
             {bot.mode === "PAPER" ? "모의 투자" : "실전 투자"}
           </Badge>
-          <Badge variant={statusBadgeVariant(bot.status)} dot>
-            {statusLabel(bot.status)}
+          <Badge variant={getBotStatusVariant(bot.status)} dot>
+            {getBotStatusLabel(bot.status)}
           </Badge>
         </div>
       </div>

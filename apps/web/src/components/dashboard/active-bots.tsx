@@ -3,26 +3,12 @@
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
+import { getBotStatusVariant } from "@/lib/bot-helpers";
 import { BotStatus } from "@cryptosentinel/shared";
 import type { Bot } from "@/stores/bot.store";
 
 interface ActiveBotsProps {
   bots: Bot[];
-}
-
-function getBotStatusVariant(status: BotStatus) {
-  switch (status) {
-    case BotStatus.RUNNING:
-      return "running" as const;
-    case BotStatus.STOPPED:
-      return "stopped" as const;
-    case BotStatus.ERROR:
-      return "error" as const;
-    case BotStatus.IDLE:
-      return "idle" as const;
-    default:
-      return "info" as const;
-  }
 }
 
 export function ActiveBots({ bots }: ActiveBotsProps) {

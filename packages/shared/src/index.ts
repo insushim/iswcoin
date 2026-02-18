@@ -44,6 +44,15 @@ export enum MarketRegime {
   BEAR_LOW_VOL = "BEAR_LOW_VOL",
 }
 
+/** 기술적 분석 기반 상세 마켓 레짐 (서버 regime.service 전용) */
+export enum DetailedMarketRegime {
+  TRENDING_UP = "TRENDING_UP",
+  TRENDING_DOWN = "TRENDING_DOWN",
+  RANGING = "RANGING",
+  VOLATILE = "VOLATILE",
+  QUIET = "QUIET",
+}
+
 export enum AlertType {
   PRICE = "PRICE",
   TRADE = "TRADE",

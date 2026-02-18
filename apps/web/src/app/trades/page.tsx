@@ -6,42 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { mapTradeRow, type TradeRow } from "@/lib/mappers";
 import { OrderSide } from "@cryptosentinel/shared";
 import { ChevronLeft, ChevronRight, Search, Filter } from "lucide-react";
 import api, { endpoints } from "@/lib/api";
-
-interface TradeRow {
-  id: string;
-  symbol: string;
-  side: OrderSide;
-  type: string;
-  price: number;
-  amount: number;
-  total: number;
-  fee: number;
-  pnl: number;
-  botName: string;
-  timestamp: string;
-}
-
-
-function mapTrade(raw: Record<string, unknown>): TradeRow {
-  const price = Number(raw.entry_price ?? raw.entryPrice ?? raw.price ?? 0);
-  const amount = Number(raw.quantity ?? raw.amount ?? 0);
-  return {
-    id: (raw.id as string) || "",
-    symbol: ((raw.symbol as string) || "").replace("/", ""),
-    side: (raw.side as OrderSide) || OrderSide.BUY,
-    type: (raw.order_type as string) || (raw.type as string) || "MARKET",
-    price,
-    amount,
-    total: price * amount,
-    fee: Number(raw.fee ?? 0),
-    pnl: Number(raw.pnl ?? 0),
-    botName: (raw.botName as string) || (raw.bot_name as string) || "",
-    timestamp: (raw.timestamp as string) || (raw.created_at as string) || new Date().toISOString(),
-  };
-}
 
 const PAGE_SIZE = 10;
 
@@ -60,7 +28,7 @@ export default function TradesPage() {
       const res = await api.get(endpoints.trades.list, { params: { limit: 100 } });
       const raw = res.data.data ?? res.data;
       const tradeData = raw.trades ?? raw.data ?? raw;
-      const list = Array.isArray(tradeData) ? tradeData.map(mapTrade) : [];
+      const list = Array.isArray(tradeData) ? tradeData.map(mapTradeRow) : [];
       setTrades(list);
     } catch {
       setTrades([]);

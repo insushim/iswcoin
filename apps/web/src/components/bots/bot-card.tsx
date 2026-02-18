@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
+import { getBotStatusVariant } from "@/lib/bot-helpers";
 import { Play, Square, Trash2, Settings } from "lucide-react";
 import { BotStatus } from "@cryptosentinel/shared";
 import type { Bot } from "@/stores/bot.store";
@@ -14,21 +15,6 @@ interface BotCardProps {
   onStop: (id: string) => void;
   onDelete: (id: string) => void;
   onSettings?: (bot: Bot) => void;
-}
-
-function getBotStatusVariant(status: BotStatus) {
-  switch (status) {
-    case BotStatus.RUNNING:
-      return "running" as const;
-    case BotStatus.STOPPED:
-      return "stopped" as const;
-    case BotStatus.ERROR:
-      return "error" as const;
-    case BotStatus.IDLE:
-      return "idle" as const;
-    default:
-      return "info" as const;
-  }
 }
 
 export function BotCard({ bot, onStart, onStop, onDelete, onSettings }: BotCardProps) {

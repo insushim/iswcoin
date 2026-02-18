@@ -1,15 +1,16 @@
+import { DetailedMarketRegime } from '@cryptosentinel/shared';
 import { logger } from '../utils/logger.js';
 import { indicatorsService, type OHLCVData } from './indicators.service.js';
 
 /**
- * 마켓 레짐 분류
+ * 마켓 레짐 분류 (DetailedMarketRegime from @cryptosentinel/shared)
  * - TRENDING_UP: 강한 상승 트렌드 (추세추종 전략 유리)
  * - TRENDING_DOWN: 강한 하락 트렌드 (숏/헤지 전략 유리)
  * - RANGING: 횡보 (평균회귀/그리드 전략 유리)
  * - VOLATILE: 높은 변동성 (포지션 축소, 스캘핑)
  * - QUIET: 낮은 변동성 (브레이크아웃 대기)
  */
-export type MarketRegime = 'TRENDING_UP' | 'TRENDING_DOWN' | 'RANGING' | 'VOLATILE' | 'QUIET';
+export type MarketRegime = DetailedMarketRegime;
 
 export interface RegimeResult {
   regime: MarketRegime;
@@ -110,23 +111,23 @@ export class MarketRegimeService {
     if (adx > 25) {
       // 높은 변동성 + 강한 트렌드 → VOLATILE
       if (volPercentile > 80) {
-        return 'VOLATILE';
+        return DetailedMarketRegime.VOLATILE;
       }
-      return bullish ? 'TRENDING_UP' : 'TRENDING_DOWN';
+      return bullish ? DetailedMarketRegime.TRENDING_UP : DetailedMarketRegime.TRENDING_DOWN;
     }
 
     // 높은 변동성이지만 방향 없음
     if (volPercentile > 75 || bbWidth > 8) {
-      return 'VOLATILE';
+      return DetailedMarketRegime.VOLATILE;
     }
 
     // 매우 낮은 변동성
     if (volPercentile < 20 && bbWidth < 3) {
-      return 'QUIET';
+      return DetailedMarketRegime.QUIET;
     }
 
     // 나머지: 횡보
-    return 'RANGING';
+    return DetailedMarketRegime.RANGING;
   }
 
   private calculatePercentile(values: number[]): number {
@@ -141,15 +142,15 @@ export class MarketRegimeService {
 
   private calculateConfidence(regime: MarketRegime, adx: number, volPercentile: number): number {
     switch (regime) {
-      case 'TRENDING_UP':
-      case 'TRENDING_DOWN':
+      case DetailedMarketRegime.TRENDING_UP:
+      case DetailedMarketRegime.TRENDING_DOWN:
         // ADX가 높을수록 트렌드 확신
         return Math.min(100, Math.round(adx * 2));
-      case 'VOLATILE':
+      case DetailedMarketRegime.VOLATILE:
         return Math.min(100, Math.round(volPercentile));
-      case 'QUIET':
+      case DetailedMarketRegime.QUIET:
         return Math.min(100, Math.round(100 - volPercentile));
-      case 'RANGING':
+      case DetailedMarketRegime.RANGING:
         // ADX 낮을수록 횡보 확신
         return Math.min(100, Math.round(100 - adx * 2));
     }
@@ -157,22 +158,22 @@ export class MarketRegimeService {
 
   private getDescription(regime: MarketRegime): string {
     const descriptions: Record<MarketRegime, string> = {
-      TRENDING_UP: '강한 상승 추세. 추세추종(모멘텀, 트레일링) 전략이 유리합니다.',
-      TRENDING_DOWN: '강한 하락 추세. 숏 포지션이나 헤지 전략이 유리합니다.',
-      RANGING: '횡보 구간. 그리드, 평균회귀, 통계적 차익거래 전략이 유리합니다.',
-      VOLATILE: '높은 변동성. 포지션 사이즈를 줄이고 스캘핑이나 단타를 고려하세요.',
-      QUIET: '낮은 변동성. 브레이크아웃을 대기하거나 DCA 적립이 유리합니다.',
+      [DetailedMarketRegime.TRENDING_UP]: '강한 상승 추세. 추세추종(모멘텀, 트레일링) 전략이 유리합니다.',
+      [DetailedMarketRegime.TRENDING_DOWN]: '강한 하락 추세. 숏 포지션이나 헤지 전략이 유리합니다.',
+      [DetailedMarketRegime.RANGING]: '횡보 구간. 그리드, 평균회귀, 통계적 차익거래 전략이 유리합니다.',
+      [DetailedMarketRegime.VOLATILE]: '높은 변동성. 포지션 사이즈를 줄이고 스캘핑이나 단타를 고려하세요.',
+      [DetailedMarketRegime.QUIET]: '낮은 변동성. 브레이크아웃을 대기하거나 DCA 적립이 유리합니다.',
     };
     return descriptions[regime];
   }
 
   private getRecommendedStrategies(regime: MarketRegime): string[] {
     const strategies: Record<MarketRegime, string[]> = {
-      TRENDING_UP: ['MOMENTUM', 'TRAILING', 'DCA'],
-      TRENDING_DOWN: ['TRAILING', 'MEAN_REVERSION', 'GRID'],
-      RANGING: ['GRID', 'MEAN_REVERSION', 'STAT_ARB', 'SCALPING'],
-      VOLATILE: ['SCALPING', 'GRID', 'MARTINGALE'],
-      QUIET: ['DCA', 'GRID', 'STAT_ARB'],
+      [DetailedMarketRegime.TRENDING_UP]: ['MOMENTUM', 'TRAILING', 'DCA'],
+      [DetailedMarketRegime.TRENDING_DOWN]: ['TRAILING', 'MEAN_REVERSION', 'GRID'],
+      [DetailedMarketRegime.RANGING]: ['GRID', 'MEAN_REVERSION', 'STAT_ARB', 'SCALPING'],
+      [DetailedMarketRegime.VOLATILE]: ['SCALPING', 'GRID', 'MARTINGALE'],
+      [DetailedMarketRegime.QUIET]: ['DCA', 'GRID', 'STAT_ARB'],
     };
     return strategies[regime];
   }
@@ -189,7 +190,13 @@ export class MarketRegimeService {
    */
   getTransitionProbabilities(): Map<MarketRegime, Map<MarketRegime, number>> {
     const transitions = new Map<MarketRegime, Map<MarketRegime, number>>();
-    const regimes: MarketRegime[] = ['TRENDING_UP', 'TRENDING_DOWN', 'RANGING', 'VOLATILE', 'QUIET'];
+    const regimes: MarketRegime[] = [
+      DetailedMarketRegime.TRENDING_UP,
+      DetailedMarketRegime.TRENDING_DOWN,
+      DetailedMarketRegime.RANGING,
+      DetailedMarketRegime.VOLATILE,
+      DetailedMarketRegime.QUIET,
+    ];
 
     for (const r of regimes) {
       transitions.set(r, new Map());
@@ -221,7 +228,7 @@ export class MarketRegimeService {
 
   private defaultResult(): RegimeResult {
     return {
-      regime: 'RANGING',
+      regime: DetailedMarketRegime.RANGING,
       confidence: 0,
       volatilityPercentile: 50,
       trendStrength: 0,

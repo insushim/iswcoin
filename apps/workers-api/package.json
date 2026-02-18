@@ -9,6 +9,7 @@
     "db:migrate:prod": "wrangler d1 execute cryptosentinel-db --remote --file=./schema.sql"
   },
   "dependencies": {
+    "@cryptosentinel/shared": "workspace:*",
     "hono": "^4.4.0"
   },
   "devDependencies": {

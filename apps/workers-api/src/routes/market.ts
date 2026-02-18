@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, AppVariables } from '../index';
+import { ema, rsi as calcRsi, macd as calcMacd, bb, atr as calcAtr } from '../indicators';
 
 type MarketEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -237,83 +238,43 @@ marketRoutes.get('/indicators/:symbol', async (c) => {
     // Bybit kline: [startTime, open, high, low, close, volume, turnover]
     const closes = raw.map((k) => parseFloat(k[4]));
     const volumes = raw.map((k) => parseFloat(k[5]));
-    const highs = raw.map((k) => parseFloat(k[2]));
-    const lows = raw.map((k) => parseFloat(k[3]));
 
     const currentPrice = closes[closes.length - 1];
     const prevPrice = closes[closes.length - 2];
     const currentVol = volumes[volumes.length - 1];
     const prevVol = volumes[volumes.length - 2];
 
-    // RSI (14)
-    const rsiPeriod = 14;
-    let gains = 0, losses = 0;
-    const start = closes.length - rsiPeriod - 1;
-    for (let i = start + 1; i < closes.length; i++) {
-      const diff = closes[i] - closes[i - 1];
-      if (diff > 0) gains += diff; else losses += Math.abs(diff);
-    }
-    const avgGain = gains / rsiPeriod;
-    const avgLoss = losses / rsiPeriod;
-    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    const rsi = parseFloat((100 - 100 / (1 + rs)).toFixed(2));
+    // RSI (14) - using shared indicator
+    const rsiVal = parseFloat(calcRsi(closes, 14).toFixed(2));
 
-    // EMA helper
-    function ema(data: number[], period: number): number {
-      if (data.length < period) return data[data.length - 1];
-      const k = 2 / (period + 1);
-      let e = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
-      for (let i = period; i < data.length; i++) e = data[i] * k + e * (1 - k);
-      return parseFloat(e.toFixed(2));
-    }
+    // EMA values - using shared indicator
+    const ema20 = parseFloat(ema(closes, 20).toFixed(2));
+    const ema50 = parseFloat(ema(closes, Math.min(50, closes.length)).toFixed(2));
+    const ema200 = parseFloat(ema(closes, Math.min(closes.length, 60)).toFixed(2));
 
-    const ema12 = ema(closes, 12);
-    const ema20 = ema(closes, 20);
-    const ema26 = ema(closes, 26);
-    const ema50 = ema(closes, Math.min(50, closes.length));
-    const ema200 = ema(closes, Math.min(closes.length, 60));
+    // MACD - using shared indicator
+    const macdResult = calcMacd(closes);
+    const macdLine = parseFloat(macdResult.line.toFixed(2));
+    const signalLine = parseFloat(macdResult.signal.toFixed(2));
+    const histogram = parseFloat(macdResult.hist.toFixed(2));
 
-    // MACD
-    const macdLine = parseFloat((ema12 - ema26).toFixed(2));
-    // Signal line: 9-period EMA of MACD values (approximate)
-    const macdValues: number[] = [];
-    for (let i = 26; i < closes.length; i++) {
-      const e12 = ema(closes.slice(0, i + 1), 12);
-      const e26 = ema(closes.slice(0, i + 1), 26);
-      macdValues.push(e12 - e26);
-    }
-    const signalLine = macdValues.length >= 9 ? parseFloat(ema(macdValues, 9).toFixed(2)) : parseFloat((macdLine * 0.8).toFixed(2));
-    const histogram = parseFloat((macdLine - signalLine).toFixed(2));
+    // Bollinger Bands (20, 2) - using shared indicator
+    const bbResult = bb(closes, 20, 2);
 
-    // Bollinger Bands (20, 2)
-    const bbP = Math.min(20, closes.length);
-    const recent = closes.slice(-bbP);
-    const bbMid = recent.reduce((a, b) => a + b, 0) / bbP;
-    const bbStd = Math.sqrt(recent.reduce((s, p) => s + (p - bbMid) ** 2, 0) / bbP);
-
-    // ATR (14)
-    const atrVals: number[] = [];
-    for (let i = Math.max(1, closes.length - 14); i < closes.length; i++) {
-      const tr = Math.max(
-        highs[i] - lows[i],
-        Math.abs(highs[i] - closes[i - 1]),
-        Math.abs(lows[i] - closes[i - 1]),
-      );
-      atrVals.push(tr);
-    }
-    const atr = atrVals.length > 0 ? parseFloat((atrVals.reduce((a, b) => a + b, 0) / atrVals.length).toFixed(2)) : 0;
+    // ATR (14) - using shared indicator (close-based approximation)
+    const atrVal = parseFloat(calcAtr(closes, 14).toFixed(2));
 
     return c.json({
       data: {
         symbol,
-        rsi,
+        rsi: rsiVal,
         macd: { line: macdLine, signal: signalLine, histogram },
         bollingerBands: {
-          upper: parseFloat((bbMid + 2 * bbStd).toFixed(2)),
-          middle: parseFloat(bbMid.toFixed(2)),
-          lower: parseFloat((bbMid - 2 * bbStd).toFixed(2)),
+          upper: parseFloat(bbResult.u.toFixed(2)),
+          middle: parseFloat(bbResult.m.toFixed(2)),
+          lower: parseFloat(bbResult.l.toFixed(2)),
         },
-        ema20, ema50, ema200, atr,
+        ema20, ema50, ema200, atr: atrVal,
         volume24h: currentVol,
         volumeChange: prevVol > 0 ? parseFloat(((currentVol - prevVol) / prevVol * 100).toFixed(2)) : 0,
         currentPrice,

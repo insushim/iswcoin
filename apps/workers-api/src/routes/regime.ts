@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { MarketRegime } from '@cryptosentinel/shared';
 import type { Env, AppVariables } from '../index';
 
 type RegimeEnv = { Bindings: Env; Variables: AppVariables };
@@ -7,13 +8,11 @@ export const regimeRoutes = new Hono<RegimeEnv>();
 
 const BYBIT_BASE = 'https://api.bybit.com/v5/market';
 
-type MarketRegime = 'BULL_HIGH_VOL' | 'BULL_LOW_VOL' | 'BEAR_HIGH_VOL' | 'BEAR_LOW_VOL';
-
 const REGIME_STRATEGIES: Record<MarketRegime, string[]> = {
-  BULL_HIGH_VOL: ['MOMENTUM', 'TRAILING', 'SCALPING'],
-  BULL_LOW_VOL: ['DCA', 'GRID', 'FUNDING_ARB'],
-  BEAR_HIGH_VOL: ['MEAN_REVERSION', 'STAT_ARB', 'SCALPING'],
-  BEAR_LOW_VOL: ['DCA', 'GRID', 'FUNDING_ARB'],
+  [MarketRegime.BULL_HIGH_VOL]: ['MOMENTUM', 'TRAILING', 'SCALPING'],
+  [MarketRegime.BULL_LOW_VOL]: ['DCA', 'GRID', 'FUNDING_ARB'],
+  [MarketRegime.BEAR_HIGH_VOL]: ['MEAN_REVERSION', 'STAT_ARB', 'SCALPING'],
+  [MarketRegime.BEAR_LOW_VOL]: ['DCA', 'GRID', 'FUNDING_ARB'],
 };
 
 async function cachedFetch(url: string, ttlSeconds: number): Promise<Response> {
@@ -39,7 +38,7 @@ function parseBybitKlines(data: BybitKlineResponse): string[][] {
 }
 
 function classifyRegime(prices: number[], windowSize: number = 7): MarketRegime {
-  if (prices.length < windowSize + 1) return 'BULL_LOW_VOL';
+  if (prices.length < windowSize + 1) return MarketRegime.BULL_LOW_VOL;
   const current = prices[prices.length - 1];
   const past = prices[Math.max(0, prices.length - 1 - windowSize)];
   const change = ((current - past) / past) * 100;
@@ -55,10 +54,10 @@ function classifyRegime(prices: number[], windowSize: number = 7): MarketRegime 
   const isBull = change > 0;
   const isHighVol = avgVol > 2.0;
 
-  if (isBull && isHighVol) return 'BULL_HIGH_VOL';
-  if (isBull && !isHighVol) return 'BULL_LOW_VOL';
-  if (!isBull && isHighVol) return 'BEAR_HIGH_VOL';
-  return 'BEAR_LOW_VOL';
+  if (isBull && isHighVol) return MarketRegime.BULL_HIGH_VOL;
+  if (isBull && !isHighVol) return MarketRegime.BULL_LOW_VOL;
+  if (!isBull && isHighVol) return MarketRegime.BEAR_HIGH_VOL;
+  return MarketRegime.BEAR_LOW_VOL;
 }
 
 // GET /current - 현재 시장 국면 (Bybit BTC 데이터 기반)
@@ -126,10 +125,10 @@ regimeRoutes.get('/current', async (c) => {
     const isHighVol = volatility > 3.0;
 
     let regime: MarketRegime;
-    if (isBull && isHighVol) regime = 'BULL_HIGH_VOL';
-    else if (isBull && !isHighVol) regime = 'BULL_LOW_VOL';
-    else if (!isBull && isHighVol) regime = 'BEAR_HIGH_VOL';
-    else regime = 'BEAR_LOW_VOL';
+    if (isBull && isHighVol) regime = MarketRegime.BULL_HIGH_VOL;
+    else if (isBull && !isHighVol) regime = MarketRegime.BULL_LOW_VOL;
+    else if (!isBull && isHighVol) regime = MarketRegime.BEAR_HIGH_VOL;
+    else regime = MarketRegime.BEAR_LOW_VOL;
 
     // 신뢰도
     const trendStrength = Math.min(100, Math.abs(priceChange30d) * 2);

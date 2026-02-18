@@ -9,6 +9,7 @@ import { MartingaleStrategy } from './martingale.strategy.js';
 import { StatArbStrategy } from './stat-arb.strategy.js';
 import { ScalpingStrategy } from './scalping.strategy.js';
 import { FundingArbStrategy } from './funding-arb.strategy.js';
+import { DetailedMarketRegime } from '@cryptosentinel/shared';
 import { marketRegimeService, type MarketRegime } from '../services/regime.service.js';
 
 /**
@@ -21,11 +22,11 @@ import { marketRegimeService, type MarketRegime } from '../services/regime.servi
  */
 // 레짐별 전략 가중치 곱셈 맵
 const REGIME_WEIGHT_MULTIPLIERS: Record<MarketRegime, Record<string, number>> = {
-  TRENDING_UP: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 1.0, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
-  TRENDING_DOWN: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 0.5, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
-  RANGING: { GRID: 1.5, MEAN_REVERSION: 1.5, STAT_ARB: 1.3, MOMENTUM: 0.3, TRAILING: 0.5, DCA: 1.0, SCALPING: 1.0, MARTINGALE: 0.8, FUNDING_ARB: 1.0 },
-  VOLATILE: { SCALPING: 1.4, GRID: 1.0, MARTINGALE: 0.8, DCA: 0.5, MOMENTUM: 0.7, TRAILING: 0.7, MEAN_REVERSION: 0.6, STAT_ARB: 0.8, FUNDING_ARB: 0.5 },
-  QUIET: { DCA: 1.4, STAT_ARB: 1.3, GRID: 1.2, MEAN_REVERSION: 1.0, MOMENTUM: 0.5, TRAILING: 0.5, SCALPING: 0.4, MARTINGALE: 0.6, FUNDING_ARB: 1.2 },
+  [DetailedMarketRegime.TRENDING_UP]: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 1.0, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
+  [DetailedMarketRegime.TRENDING_DOWN]: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 0.5, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
+  [DetailedMarketRegime.RANGING]: { GRID: 1.5, MEAN_REVERSION: 1.5, STAT_ARB: 1.3, MOMENTUM: 0.3, TRAILING: 0.5, DCA: 1.0, SCALPING: 1.0, MARTINGALE: 0.8, FUNDING_ARB: 1.0 },
+  [DetailedMarketRegime.VOLATILE]: { SCALPING: 1.4, GRID: 1.0, MARTINGALE: 0.8, DCA: 0.5, MOMENTUM: 0.7, TRAILING: 0.7, MEAN_REVERSION: 0.6, STAT_ARB: 0.8, FUNDING_ARB: 0.5 },
+  [DetailedMarketRegime.QUIET]: { DCA: 1.4, STAT_ARB: 1.3, GRID: 1.2, MEAN_REVERSION: 1.0, MOMENTUM: 0.5, TRAILING: 0.5, SCALPING: 0.4, MARTINGALE: 0.6, FUNDING_ARB: 1.2 },
 };
 
 // 전략별 신뢰도 범위 (정규화용)

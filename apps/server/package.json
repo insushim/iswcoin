@@ -13,6 +13,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@cryptosentinel/shared": "workspace:*",
     "@prisma/client": "^5.10.0",
     "bcryptjs": "^2.4.3",
     "ccxt": "^4.2.0",
@@ -21,7 +22,6 @@
     "dotenv": "^16.4.0",
     "express": "^4.18.2",
     "helmet": "^8.1.0",
-    "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
     "socket.io": "^4.7.4",

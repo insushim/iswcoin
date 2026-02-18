@@ -6,6 +6,7 @@ import {
   Exchange,
 } from "@cryptosentinel/shared";
 import api, { endpoints } from "@/lib/api";
+import { mapBot } from "@/lib/mappers";
 
 export interface Bot {
   id: string;
@@ -47,25 +48,6 @@ interface BotState {
   updateBotStatus: (botId: string, status: BotStatus) => void;
   setSelectedBot: (bot: Bot | null) => void;
   clearError: () => void;
-}
-
-function mapBot(raw: Record<string, unknown>): Bot {
-  return {
-    id: (raw.id as string) || "",
-    name: (raw.name as string) || "",
-    symbol: ((raw.symbol as string) || "BTC/USDT").replace("/", ""),
-    exchange: ((raw.exchange as string) || "BINANCE").toUpperCase() as Exchange,
-    strategy: (raw.strategy as StrategyType) || StrategyType.DCA,
-    mode: (raw.mode as TradingMode) || (raw.trading_mode as TradingMode) || TradingMode.PAPER,
-    status: (raw.status as BotStatus) || BotStatus.STOPPED,
-    config: typeof raw.config === "string" ? (() => { try { return JSON.parse(raw.config as string || "{}"); } catch { return {}; } })() : (raw.config as Record<string, number | string | boolean>) || {},
-    pnl: Number(raw.pnl ?? raw.total_profit ?? 0),
-    pnlPercent: Number(raw.pnlPercent ?? raw.pnl_percent ?? 0),
-    totalTrades: Number(raw.totalTrades ?? raw.total_trades ?? 0),
-    winRate: Number(raw.winRate ?? raw.win_rate ?? 0),
-    createdAt: (raw.createdAt as string) || (raw.created_at as string) || new Date().toISOString(),
-    updatedAt: (raw.updatedAt as string) || (raw.updated_at as string) || new Date().toISOString(),
-  };
 }
 
 export const useBotStore = create<BotState>((set, get) => ({

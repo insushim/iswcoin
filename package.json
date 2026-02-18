@@ -14,7 +14,7 @@
     "db:push": "pnpm --filter @cryptosentinel/server prisma:push",
     "db:migrate": "pnpm --filter @cryptosentinel/server prisma:migrate",
     "db:studio": "pnpm --filter @cryptosentinel/server prisma:studio",
-    "lint": "pnpm run --parallel lint",
+    "lint": "eslint apps/server/src apps/web/src apps/workers-api/src packages/shared/src --ext .ts,.tsx",
     "clean": "pnpm run --parallel clean",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
@@ -34,5 +34,10 @@
   "engines": {
     "node": ">=18.0.0",
     "pnpm": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.0",
+    "typescript-eslint": "^8.56.0"
   }
 }
