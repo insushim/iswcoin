@@ -260,20 +260,34 @@ export class EnsembleStrategy extends BaseStrategy {
     const raw = (cfg as unknown as Record<string, unknown>)['strategies'];
     if (Array.isArray(raw)) return raw as string[];
     if (typeof raw === 'string') {
-      try { return JSON.parse(raw); } catch { return []; }
+      // JSON 배열 파싱 시도, 실패 시 쉼표 구분 문자열로 처리
+      try { return JSON.parse(raw); } catch {
+        return raw.split(',').map(s => s.trim()).filter(Boolean);
+      }
     }
     return [];
   }
 
   /**
    * config에서 weights 객체 파싱
+   * - weights 키가 있으면 그것을 사용
+   * - 없으면 개별 전략명 키(DCA, GRID 등)를 weight로 사용
    */
   private parseWeights(cfg: Record<string, number>): Record<string, number> {
     const raw = (cfg as unknown as Record<string, unknown>)['weights'];
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, number>;
     if (typeof raw === 'string') {
-      try { return JSON.parse(raw); } catch { return {}; }
+      try { return JSON.parse(raw); } catch { /* fall through */ }
     }
-    return {};
+
+    // fallback: 개별 전략명 키에서 weight 추출 (DCA: 0.8, GRID: 0.9 등)
+    const STRATEGY_NAMES = ['DCA', 'GRID', 'MOMENTUM', 'MEAN_REVERSION', 'TRAILING', 'MARTINGALE', 'STAT_ARB', 'SCALPING', 'FUNDING_ARB', 'RL_AGENT'];
+    const weights: Record<string, number> = {};
+    for (const name of STRATEGY_NAMES) {
+      if (typeof cfg[name] === 'number') {
+        weights[name] = cfg[name];
+      }
+    }
+    return weights;
   }
 }

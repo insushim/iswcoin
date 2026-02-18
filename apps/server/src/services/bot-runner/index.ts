@@ -518,9 +518,8 @@ export class BotRunnerService {
       }
     };
 
-    // 첫 반복 스케줄 (PAPER 모드는 환경변수 간격, REAL은 60초)
-    const firstInterval = mode === 'PAPER' ? env.PAPER_LOOP_INTERVAL_MS : 60_000;
-    control.timerId = setTimeout(runLoop, firstInterval);
+    // 첫 반복은 즉시 실행 (5초 딜레이만, 거래소 API 준비 대기)
+    control.timerId = setTimeout(runLoop, 5000);
   }
 
   /**
