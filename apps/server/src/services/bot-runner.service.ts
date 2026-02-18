@@ -554,7 +554,7 @@ class BotRunnerService {
             message: `포지션 불일치 감지: 거래소 ${exchangeBalance.toFixed(6)} vs 내부 ${internalAmount.toFixed(6)} (차이 ${diffPercent.toFixed(2)}%)`,
             data: { exchangeBalance, internalAmount, diffPercent, symbol } as Prisma.InputJsonValue,
           },
-        }).catch(() => {});
+        }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
       } else {
         logger.debug('Position reconciliation OK', {
           botId, symbol, exchangeBalance, internalAmount,
@@ -636,7 +636,7 @@ class BotRunnerService {
 
     // REAL 모드: 시작 시 포지션 대사
     if (mode === 'REAL' && cachedExchange) {
-      await this.reconcilePosition(botId, symbol, cachedExchange, 0).catch(() => {});
+      await this.reconcilePosition(botId, symbol, cachedExchange, 0).catch((err) => logger.debug('Background task failed', { error: String(err) }));
     }
 
     const runLoop = async () => {
@@ -659,7 +659,7 @@ class BotRunnerService {
 
         // REAL 모드: 주기적 포지션 대사
         if (mode === 'REAL' && exchange && control.loopCount % RECONCILE_INTERVAL === 0) {
-          await this.reconcilePosition(botId, symbol, exchange, 0).catch(() => {});
+          await this.reconcilePosition(botId, symbol, exchange, 0).catch((err) => logger.debug('Background task failed', { error: String(err) }));
         }
 
         // OHLCV 데이터 가져오기
@@ -738,7 +738,7 @@ class BotRunnerService {
               level: 'WARN',
               message: `서킷 브레이커 발동: 연속 ${cbCheck.consecutiveLosses}회 손실, ${Math.ceil(cbCheck.cooldownRemainingMs / 60000)}분 대기`,
             },
-          }).catch(() => {});
+          }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
           return;
         }
 
@@ -757,7 +757,7 @@ class BotRunnerService {
 
         // 피크 에퀴티 업데이트 (MDD 추적용)
         if (riskCheck.allowed) {
-          const currentEquity = (riskCheck.currentDailyLoss === 0 ? 10000 : 10000) + unrealizedPnl;
+          const currentEquity = env.PAPER_INITIAL_BALANCE + unrealizedPnl;
           if (currentEquity > control.peakEquity) {
             control.peakEquity = currentEquity;
           }
@@ -773,7 +773,7 @@ class BotRunnerService {
               level: riskCheck.shouldEmergencyStop ? 'ERROR' : 'WARN',
               message: `리스크 한도 초과: ${riskCheck.reason}`,
             },
-          }).catch(() => {});
+          }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
 
           // MDD 킬스위치: 봇 정지
           if (riskCheck.shouldEmergencyStop) {
@@ -781,7 +781,7 @@ class BotRunnerService {
             await prisma.bot.update({
               where: { id: botId },
               data: { status: 'ERROR' },
-            }).catch(() => {});
+            }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
             control.stopped = true;
 
             // 열린 포지션 강제 청산
@@ -963,7 +963,7 @@ class BotRunnerService {
             level: 'ERROR',
             message: `Bot error: ${String(err)}`,
           },
-        }).catch(() => {});
+        }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
       }
 
       // 이전 반복 완료 후 다음 반복 스케줄 (겹침 방지)
@@ -1142,11 +1142,11 @@ class BotRunnerService {
     userId: string
   ): Promise<void> {
     // 실제 잔고 조회
-    let capital = 10000; // fallback
+    let capital = env.PAPER_INITIAL_BALANCE; // fallback
     try {
       const balances = await exchangeService.getBalance(exchange);
       const usdtBalance = balances['USDT'] as { total?: number } | undefined;
-      capital = usdtBalance?.total ?? 10000;
+      capital = usdtBalance?.total ?? env.PAPER_INITIAL_BALANCE;
     } catch (err) {
       logger.warn('Failed to fetch balance, using portfolio value', { error: String(err) });
       const portfolio = await prisma.portfolio.findFirst({
@@ -1154,7 +1154,7 @@ class BotRunnerService {
         orderBy: { updatedAt: 'desc' },
         select: { totalValue: true },
       });
-      capital = portfolio?.totalValue ?? 10000;
+      capital = portfolio?.totalValue ?? env.PAPER_INITIAL_BALANCE;
     }
 
     // 동적 주문 수량 계산 (포지션 누적 상한 적용)
@@ -1202,7 +1202,7 @@ class BotRunnerService {
             level: 'WARN',
             message: `유동성 검사 실패: ${preCheck.reason}`,
           },
-        }).catch(() => {});
+        }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
         return;
       }
 
@@ -1271,7 +1271,7 @@ class BotRunnerService {
           avgFillPrice: fillPrice,
           status: orderStatus as 'PENDING' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'FAILED',
         },
-      }).catch(() => {});
+      }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
 
       // 체결 실패 (filled=0): 포지션 업데이트 안 함
       if (filledAmount <= 0) {
@@ -1353,7 +1353,7 @@ class BotRunnerService {
           level: 'ERROR',
           message: `거래 실행 실패: ${String(err)}`,
         },
-      }).catch(() => {});
+      }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
     }
   }
 
@@ -1425,7 +1425,7 @@ class BotRunnerService {
         level: 'WARN',
         message: reason,
       },
-    }).catch(() => {});
+    }).catch((err) => logger.debug('Background task failed', { error: String(err) }));
   }
 
   /**

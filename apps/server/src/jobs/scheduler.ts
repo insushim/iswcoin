@@ -4,6 +4,7 @@ import { prisma } from '../db.js';
 import { logger } from '../utils/logger.js';
 import { riskManager } from '../services/risk.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { exchangeService } from '../services/exchange.service.js';
 import { emitTickerUpdate, emitBotStatus } from '../websocket/index.js';
 import { botRunnerService } from '../services/bot-runner.service.js';
 import { getDateRanges } from '../utils/date.js';
@@ -40,7 +41,7 @@ export function startScheduler(): void {
       // 병렬 ticker 업데이트 (순차 → 병렬로 성능 개선)
       await Promise.allSettled(symbols.map(async (symbol) => {
         try {
-          const ticker = await exchange.fetchTicker(symbol);
+          const ticker = await exchangeService.getTicker(exchange, symbol);
 
           emitTickerUpdate(symbol, {
             symbol,
@@ -299,6 +300,41 @@ export function startScheduler(): void {
       }
     } catch (err) {
       logger.error('Health check job failed', { error: String(err) });
+    }
+  });
+
+  // 데이터 보존 정책: 매일 02:00에 오래된 데이터 정리
+  cron.schedule('0 2 * * *', async () => {
+    try {
+      logger.info('Running data retention cleanup');
+
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+
+      // bot_logs: 30일 이상 삭제 (가장 빠르게 증가하는 테이블)
+      const deletedLogs = await prisma.botLog.deleteMany({
+        where: { createdAt: { lt: thirtyDaysAgo } },
+      });
+
+      // alerts: 읽은 알림 7일 이상 삭제
+      const deletedAlerts = await prisma.alert.deleteMany({
+        where: { isRead: true, createdAt: { lt: sevenDaysAgo } },
+      });
+
+      // order_records: 90일 이상 삭제
+      const deletedOrders = await prisma.orderRecord.deleteMany({
+        where: { createdAt: { lt: ninetyDaysAgo } },
+      });
+
+      logger.info('Data retention cleanup completed', {
+        deletedBotLogs: deletedLogs.count,
+        deletedAlerts: deletedAlerts.count,
+        deletedOrderRecords: deletedOrders.count,
+      });
+    } catch (err) {
+      logger.error('Data retention cleanup failed', { error: String(err) });
     }
   });
 

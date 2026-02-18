@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger.js';
 import { prisma } from '../db.js';
 import { getDateRanges } from '../utils/date.js';
+import { env } from '../config/env.js';
 
 export interface RiskConfig {
   maxTradeRiskPercent: number;
@@ -171,7 +172,7 @@ export class RiskManager {
       }),
     ]);
 
-    const totalCapital = portfolio?.totalValue ?? 10000;
+    const totalCapital = portfolio?.totalValue ?? env.PAPER_INITIAL_BALANCE;
     const dailyPnL = dailyAgg._sum.pnl ?? 0;
     const weeklyPnL = weeklyAgg._sum.pnl ?? 0;
 
@@ -252,7 +253,7 @@ export class RiskManager {
       }),
     ]);
 
-    const totalCapital = portfolio?.totalValue ?? 10000;
+    const totalCapital = portfolio?.totalValue ?? env.PAPER_INITIAL_BALANCE;
     // 실현 + 미실현 PnL 합산
     const dailyPnL = (dailyAgg._sum.pnl ?? 0) + unrealizedPnl;
     const weeklyPnL = (weeklyAgg._sum.pnl ?? 0) + unrealizedPnl;

@@ -32,7 +32,29 @@ export interface TVLData {
 }
 
 export class OnchainAnalyticsService {
+  // TTL 캐시 (외부 API rate limit 방지)
+  private cache = new Map<string, { data: unknown; expiry: number }>();
+  private readonly CACHE_TTL = {
+    exchangeFlow: 10 * 60 * 1000,  // 10분
+    mvrv: 10 * 60 * 1000,          // 10분
+    fundingRate: 60 * 1000,         // 1분
+    tvl: 10 * 60 * 1000,           // 10분
+    gasPrice: 30 * 1000,            // 30초
+  };
+
+  private getCached<T>(key: string): T | null {
+    const entry = this.cache.get(key);
+    if (entry && Date.now() < entry.expiry) return entry.data as T;
+    return null;
+  }
+
+  private setCache(key: string, data: unknown, ttl: number): void {
+    this.cache.set(key, { data, expiry: Date.now() + ttl });
+  }
+
   async getExchangeFlow(): Promise<ExchangeFlowData[]> {
+    const cached = this.getCached<ExchangeFlowData[]>('exchangeFlow');
+    if (cached) return cached;
     logger.debug('Fetching exchange flow data');
 
     // Try CryptoQuant-style data via public APIs
@@ -49,7 +71,7 @@ export class OnchainAnalyticsService {
         const exchangeMap: Record<string, number> = {};
         for (const ex of data) exchangeMap[ex.id] = ex.trade_volume_24h_btc || 0;
 
-        return exchanges.map((exchange) => {
+        const result = exchanges.map((exchange) => {
           const vol = exchangeMap[exchange] || 0;
           // Net flow approximation: positive = net inflow
           return {
@@ -60,6 +82,8 @@ export class OnchainAnalyticsService {
             timestamp,
           };
         });
+        this.setCache('exchangeFlow', result, this.CACHE_TTL.exchangeFlow);
+        return result;
       }
     } catch (err) {
       logger.warn('Exchange flow API failed', { error: String(err) });
@@ -76,6 +100,8 @@ export class OnchainAnalyticsService {
   }
 
   async getMVRV(): Promise<MVRVData> {
+    const cached = this.getCached<MVRVData>('mvrv');
+    if (cached) return cached;
     logger.debug('Fetching MVRV data');
 
     try {
@@ -92,13 +118,15 @@ export class OnchainAnalyticsService {
         const mvrv = 2.0; // Neutral estimate - clearly marked as approximation
         const realizedCap = marketCap > 0 ? marketCap / mvrv : 0;
 
-        return {
+        const result: MVRVData = {
           mvrv,
           marketCap,
           realizedCap,
           zone: 'fair',
           timestamp: Date.now(),
         };
+        this.setCache('mvrv', result, this.CACHE_TTL.mvrv);
+        return result;
       }
     } catch (err) {
       logger.warn('MVRV data fetch failed', { error: String(err) });
@@ -114,6 +142,9 @@ export class OnchainAnalyticsService {
   }
 
   async getFundingRate(symbol: string): Promise<FundingRateData> {
+    const cacheKey = `fundingRate:${symbol}`;
+    const cached = this.getCached<FundingRateData>(cacheKey);
+    if (cached) return cached;
     logger.debug('Fetching funding rate', { symbol });
 
     try {
@@ -139,13 +170,15 @@ export class OnchainAnalyticsService {
       const entry = data[0]!;
       const rate = parseFloat(entry.fundingRate);
 
-      return {
+      const result: FundingRateData = {
         symbol,
         fundingRate: rate,
         nextFundingTime: entry.fundingTime,
         predictedRate: rate, // 예측값 = 현재값 (랜덤 노이즈 제거)
         annualizedRate: rate * 3 * 365 * 100,
       };
+      this.setCache(cacheKey, result, this.CACHE_TTL.fundingRate);
+      return result;
     } catch (err) {
       logger.warn('Failed to fetch funding rate from Binance', { symbol, error: String(err) });
       return this.getDefaultFundingRate(symbol);
@@ -164,6 +197,8 @@ export class OnchainAnalyticsService {
   }
 
   async getTVL(): Promise<TVLData> {
+    const cached = this.getCached<TVLData>('tvl');
+    if (cached) return cached;
     logger.debug('Fetching TVL data from DeFiLlama');
 
     try {
@@ -188,12 +223,14 @@ export class OnchainAnalyticsService {
           ? top5.reduce((sum, p) => sum + p.tvl * p.change24h, 0) / totalTVL
           : 0;
 
-        return {
+        const result: TVLData = {
           totalTVL,
           change24h: weightedChange,
           topProtocols: top5,
           timestamp: Date.now(),
         };
+        this.setCache('tvl', result, this.CACHE_TTL.tvl);
+        return result;
       }
     } catch (err) {
       logger.warn('DeFiLlama API failed', { error: String(err) });
@@ -208,6 +245,8 @@ export class OnchainAnalyticsService {
   }
 
   async getGasPrice(): Promise<{ slow: number; standard: number; fast: number }> {
+    const cached = this.getCached<{ slow: number; standard: number; fast: number }>('gasPrice');
+    if (cached) return cached;
     try {
       const response = await fetch('https://api.etherscan.io/api?module=gastracker&action=gasoracle', {
         signal: AbortSignal.timeout(10000),
@@ -224,11 +263,13 @@ export class OnchainAnalyticsService {
         };
       };
 
-      return {
+      const result = {
         slow: parseInt(data.result.SafeGasPrice, 10),
         standard: parseInt(data.result.ProposeGasPrice, 10),
         fast: parseInt(data.result.FastGasPrice, 10),
       };
+      this.setCache('gasPrice', result, this.CACHE_TTL.gasPrice);
+      return result;
     } catch (err) {
       logger.warn('Failed to fetch gas price', { error: String(err) });
       return { slow: 20, standard: 30, fast: 50 };

@@ -25,6 +25,10 @@ export class SentimentService {
     data: null,
     expiry: 0,
   };
+  private whaleActivityCache: { data: WhaleActivityData | null; expiry: number } = {
+    data: null,
+    expiry: 0,
+  };
 
   private readonly CACHE_DURATION = 10 * 60 * 1000;
 
@@ -80,6 +84,10 @@ export class SentimentService {
   }
 
   async getWhaleActivity(): Promise<WhaleActivityData> {
+    if (this.whaleActivityCache.data && Date.now() < this.whaleActivityCache.expiry) {
+      return this.whaleActivityCache.data;
+    }
+
     try {
       // blockchain.info: 최근 대규모 BTC 거래 조회
       const res = await fetch('https://blockchain.info/latestblock', {
@@ -89,12 +97,14 @@ export class SentimentService {
         const block = (await res.json()) as { n_tx: number; height: number };
         // 블록 트랜잭션 수 기반 대략적 고래 활동 추정
         const estimatedLargeTx = Math.max(1, Math.floor(block.n_tx * 0.02)); // ~2%가 대규모
-        return {
+        const result: WhaleActivityData = {
           largeTxCount24h: estimatedLargeTx,
           netFlow: 0, // 정확한 넷플로우는 전문 API 필요
           dominantDirection: 'neutral',
           lastUpdated: Date.now(),
         };
+        this.whaleActivityCache = { data: result, expiry: Date.now() + this.CACHE_DURATION };
+        return result;
       }
     } catch (err) {
       logger.warn('Whale activity fetch failed', { error: String(err) });
