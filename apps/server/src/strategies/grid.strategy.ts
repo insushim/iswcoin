@@ -159,4 +159,20 @@ export class GridStrategy extends BaseStrategy {
       }
     }
   }
+
+  serializeState(): Record<string, unknown> {
+    return {
+      gridLevels: this.gridLevels,
+      lastGridSetup: this.lastGridSetup,
+    };
+  }
+
+  restoreState(state: Record<string, unknown>): void {
+    if (Array.isArray(state['gridLevels'])) {
+      this.gridLevels = state['gridLevels'] as GridLevel[];
+    }
+    if (typeof state['lastGridSetup'] === 'number') {
+      this.lastGridSetup = state['lastGridSetup'];
+    }
+  }
 }

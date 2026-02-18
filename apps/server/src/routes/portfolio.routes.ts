@@ -98,34 +98,25 @@ router.get('/history', async (req: AuthenticatedRequest, res: Response): Promise
     });
     const botIds = bots.map((b) => b.id);
 
-    const trades = await prisma.trade.findMany({
-      where: {
-        botId: { in: botIds },
-        timestamp: { gte: since },
-      },
-      select: { timestamp: true, pnl: true, price: true, amount: true },
-      orderBy: { timestamp: 'asc' },
-    });
+    // DB 집계 쿼리로 일별 데이터 생성 (메모리 최적화)
+    const dailyAgg = botIds.length > 0
+      ? await prisma.$queryRaw<Array<{ date: Date; pnl: number; trades: bigint; volume: number }>>`
+          SELECT DATE("timestamp") as date,
+                 COALESCE(SUM(pnl), 0) as pnl,
+                 COUNT(*) as trades,
+                 COALESCE(SUM(price * amount), 0) as volume
+          FROM trades
+          WHERE "botId" = ANY(${botIds}) AND "timestamp" >= ${since}
+          GROUP BY DATE("timestamp")
+          ORDER BY date ASC`
+      : [];
 
-    const dailyMap = new Map<string, { pnl: number; trades: number; volume: number }>();
-
-    for (const trade of trades) {
-      const dateKey = trade.timestamp.toISOString().split('T')[0]!;
-      const existing = dailyMap.get(dateKey) ?? { pnl: 0, trades: 0, volume: 0 };
-      existing.pnl += trade.pnl ?? 0;
-      existing.trades += 1;
-      existing.volume += trade.price * trade.amount;
-      dailyMap.set(dateKey, existing);
-    }
-
-    const history = Array.from(dailyMap.entries())
-      .map(([date, data]) => ({
-        date,
-        pnl: Math.round(data.pnl * 100) / 100,
-        trades: data.trades,
-        volume: Math.round(data.volume * 100) / 100,
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const history = (dailyAgg as Array<{ date: Date; pnl: number; trades: bigint; volume: number }>).map((row) => ({
+      date: new Date(row.date).toISOString().split('T')[0]!,
+      pnl: Math.round(Number(row.pnl) * 100) / 100,
+      trades: Number(row.trades),
+      volume: Math.round(Number(row.volume) * 100) / 100,
+    }));
 
     let cumulativePnL = 0;
     const equityCurve = history.map((entry) => {

@@ -69,7 +69,14 @@ tradeRoutes.get('/', async (c) => {
   let query = 'SELECT t.*, b.name as bot_name FROM trades t LEFT JOIN bots b ON t.bot_id = b.id WHERE t.user_id = ?';
   const params: (string | number)[] = [userId];
 
-  if (symbol) { query += ' AND t.symbol LIKE ?'; params.push(`%${symbol}%`); }
+  if (symbol) {
+    // LIKE 와일드카드 이스케이프 + 심볼 포맷 검증
+    if (!/^[A-Z0-9/]{1,20}$/i.test(symbol)) {
+      return c.json({ error: 'Invalid symbol format' }, 400);
+    }
+    const escaped = symbol.replace(/[%_\\]/g, '\\$&');
+    query += " AND t.symbol LIKE ? ESCAPE '\\'"; params.push(`%${escaped}%`);
+  }
   if (side && side !== 'all') { query += ' AND t.side = ?'; params.push(side); }
   if (botId) { query += ' AND t.bot_id = ?'; params.push(botId); }
 
@@ -128,18 +135,43 @@ tradeRoutes.get('/:id', async (c) => {
   return c.json({ data: mapped });
 });
 
-// POST / - Create trade
+// POST / - Create trade (입력 검증 포함)
 tradeRoutes.post('/', async (c) => {
   const userId = c.get('userId');
   const body = await c.req.json();
   const id = generateId();
 
+  // 입력 검증
+  const VALID_SIDES = ['BUY', 'SELL'];
+  const VALID_EXCHANGES = ['BINANCE', 'UPBIT', 'BYBIT', 'BITHUMB'];
+  const VALID_ORDER_TYPES = ['MARKET', 'LIMIT', 'STOP_LOSS', 'TAKE_PROFIT'];
+  const SYMBOL_REGEX = /^[A-Z0-9]{2,10}(\/[A-Z0-9]{2,10})?$/;
+
+  const symbol = String(body.symbol || '').toUpperCase();
+  const side = String(body.side || '').toUpperCase();
+  const exchange = String(body.exchange || 'BINANCE').toUpperCase();
+  const orderType = String(body.orderType || 'MARKET').toUpperCase();
+  const entryPrice = Number(body.entryPrice);
+  const quantity = Number(body.quantity);
+
+  if (!SYMBOL_REGEX.test(symbol)) return c.json({ error: 'Invalid symbol format' }, 400);
+  if (!VALID_SIDES.includes(side)) return c.json({ error: 'Invalid side (BUY/SELL)' }, 400);
+  if (!VALID_EXCHANGES.includes(exchange)) return c.json({ error: 'Invalid exchange' }, 400);
+  if (!VALID_ORDER_TYPES.includes(orderType)) return c.json({ error: 'Invalid order type' }, 400);
+  if (isNaN(entryPrice) || entryPrice <= 0) return c.json({ error: 'Invalid entry price' }, 400);
+  if (isNaN(quantity) || quantity <= 0) return c.json({ error: 'Invalid quantity' }, 400);
+
+  const stopLoss = body.stopLoss ? Number(body.stopLoss) : null;
+  const takeProfit = body.takeProfit ? Number(body.takeProfit) : null;
+  if (stopLoss !== null && (isNaN(stopLoss) || stopLoss <= 0)) return c.json({ error: 'Invalid stop loss' }, 400);
+  if (takeProfit !== null && (isNaN(takeProfit) || takeProfit <= 0)) return c.json({ error: 'Invalid take profit' }, 400);
+
   await c.env.DB.prepare(
     'INSERT INTO trades (id, user_id, bot_id, exchange, symbol, side, order_type, status, entry_price, quantity, stop_loss, take_profit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(
-    id, userId, body.botId || null, body.exchange || 'BINANCE',
-    body.symbol, body.side, body.orderType || 'MARKET', 'OPEN',
-    body.entryPrice, body.quantity, body.stopLoss || null, body.takeProfit || null
+    id, userId, body.botId || null, exchange,
+    symbol, side, orderType, 'OPEN',
+    entryPrice, quantity, stopLoss, takeProfit
   ).run();
 
   const trade = await c.env.DB.prepare('SELECT * FROM trades WHERE id = ?').bind(id).first();

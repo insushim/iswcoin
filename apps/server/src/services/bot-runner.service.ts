@@ -1,11 +1,12 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { logger } from '../utils/logger.js';
-import { getStrategy, type StrategyType } from '../strategies/index.js';
+import { getStrategy, type StrategyType, GridStrategy, MartingaleStrategy } from '../strategies/index.js';
 import { exchangeService, EXCHANGE_FEE_RATES, type SupportedExchange } from './exchange.service.js';
 import { indicatorsService } from './indicators.service.js';
-import { riskManager } from './risk.service.js';
+import { riskManager, type RiskCheckEnhancedResult } from './risk.service.js';
 import { slippageService } from './slippage.service.js';
+import { executionService } from './execution.service.js';
 import { decrypt } from '../utils/encryption.js';
 import { env } from '../config/env.js';
 
@@ -54,9 +55,11 @@ interface PaperTradeLog {
 const MAX_PAPER_LOGS = 1000;
 const MIN_CONFIDENCE_THRESHOLD = 0.3;
 const MIN_ORDER_VALUE_USDT = 10;
+const PAPER_SAVE_INTERVAL = 10;  // 매 N회 루프마다 Paper 상태 저장
+const RECONCILE_INTERVAL = 10;   // 매 N회 루프마다 포지션 대사 (REAL만)
 
 class BotRunnerService {
-  private readonly activeBots: Map<string, { running: boolean; stopped: boolean; timerId?: ReturnType<typeof setTimeout> }> = new Map();
+  private readonly activeBots: Map<string, { running: boolean; stopped: boolean; timerId?: ReturnType<typeof setTimeout>; loopCount: number; peakEquity: number }> = new Map();
   private paperTradeLogs: Map<string, PaperTradeLog[]> = new Map();
   // 포지션 추적 (봇별 심볼별)
   private readonly positions: Map<string, TrackedPosition> = new Map();
@@ -205,36 +208,63 @@ class BotRunnerService {
   }
 
   /**
-   * 리스크 관리 기반 동적 주문 수량 계산
+   * 리스크 관리 기반 동적 주문 수량 계산 (포지션 누적 상한 적용)
    */
   private calculateOrderAmount(
     capital: number,
     entryPrice: number,
     atr: number,
-    signal: { stopLoss?: number; confidence: number }
+    signal: { stopLoss?: number; confidence: number },
+    currentPosition?: TrackedPosition | null
   ): number {
     if (entryPrice <= 0 || capital <= 0) return 0;
 
-    // ATR 기반 포지션 사이징
-    const riskPercent = Math.min(2, riskManager.getConfig().maxTradeRiskPercent);
+    const riskConfig = riskManager.getConfig();
+    const riskPercent = Math.min(2, riskConfig.maxTradeRiskPercent);
 
+    let orderAmount: number;
+
+    // ATR 기반 포지션 사이징
     if (atr > 0) {
       const sizing = riskManager.calculateATRPositionSize(capital, riskPercent, entryPrice, atr);
-      return Math.max(0, sizing.positionSize);
-    }
-
-    // ATR 없으면 고정 비율 사이징 (자본의 2% 리스크)
-    if (signal.stopLoss && signal.stopLoss > 0) {
+      orderAmount = Math.max(0, sizing.positionSize);
+    } else if (signal.stopLoss && signal.stopLoss > 0) {
+      // ATR 없으면 고정 비율 사이징 (자본의 2% 리스크)
       const stopDistance = Math.abs(entryPrice - signal.stopLoss);
       if (stopDistance > 0) {
         const riskAmount = capital * (riskPercent / 100);
-        return riskAmount / stopDistance;
+        orderAmount = riskAmount / stopDistance;
+      } else {
+        orderAmount = (capital * 0.05) / entryPrice;
+      }
+    } else {
+      // Fallback: 자본의 5% 이내
+      orderAmount = (capital * 0.05) / entryPrice;
+    }
+
+    // 포지션 누적 상한: 기존 포지션 + 신규 주문 <= maxPositionSizePercent
+    if (currentPosition && currentPosition.isOpen) {
+      const existingValue = currentPosition.amount * entryPrice;
+      const newOrderValue = orderAmount * entryPrice;
+      const maxPositionValue = capital * (riskConfig.maxPositionSizePercent / 100);
+
+      if (existingValue + newOrderValue > maxPositionValue) {
+        const remainingValue = Math.max(0, maxPositionValue - existingValue);
+        const cappedAmount = remainingValue / entryPrice;
+        if (cappedAmount <= 0) {
+          logger.warn('Position size limit reached, cannot add more', {
+            existingValue, maxPositionValue,
+          });
+          return 0;
+        }
+        logger.info('Order amount capped by position limit', {
+          original: orderAmount, capped: cappedAmount, maxPositionValue,
+        });
+        orderAmount = cappedAmount;
       }
     }
 
-    // Fallback: 자본의 5% 이내
-    const maxPositionValue = capital * 0.05;
-    return maxPositionValue / entryPrice;
+    return orderAmount;
   }
 
   /**
@@ -491,6 +521,51 @@ class BotRunnerService {
   }
 
   /**
+   * 포지션 대사: 거래소 실제 잔고 vs 내부 상태 비교 (REAL 모드 전용)
+   */
+  private async reconcilePosition(
+    botId: string,
+    symbol: string,
+    exchange: ReturnType<typeof exchangeService.initExchange>,
+    currentPrice: number
+  ): Promise<void> {
+    try {
+      const balances = await exchangeService.getBalance(exchange);
+      const [base] = symbol.split('/') as [string, string];
+      const exchangeBalance = (balances[base] as { total?: number } | undefined)?.total ?? 0;
+
+      const internalPosition = this.getPosition(botId, symbol);
+      const internalAmount = internalPosition?.isOpen ? internalPosition.amount : 0;
+
+      const diff = Math.abs(exchangeBalance - internalAmount);
+      const diffPercent = internalAmount > 0 ? (diff / internalAmount) * 100 : (exchangeBalance > 0 ? 100 : 0);
+
+      if (diffPercent >= 2) {
+        logger.error('Position reconciliation mismatch', {
+          botId, symbol,
+          exchangeBalance, internalAmount,
+          diffPercent: diffPercent.toFixed(2),
+        });
+
+        await prisma.botLog.create({
+          data: {
+            botId,
+            level: 'ERROR',
+            message: `포지션 불일치 감지: 거래소 ${exchangeBalance.toFixed(6)} vs 내부 ${internalAmount.toFixed(6)} (차이 ${diffPercent.toFixed(2)}%)`,
+            data: { exchangeBalance, internalAmount, diffPercent, symbol } as Prisma.InputJsonValue,
+          },
+        }).catch(() => {});
+      } else {
+        logger.debug('Position reconciliation OK', {
+          botId, symbol, exchangeBalance, internalAmount,
+        });
+      }
+    } catch (err) {
+      logger.warn('Position reconciliation failed', { botId, symbol, error: String(err) });
+    }
+  }
+
+  /**
    * 봇 트레이딩 루프 시작
    */
   async startBotLoop(
@@ -504,6 +579,25 @@ class BotRunnerService {
   ): Promise<void> {
     const strategy = getStrategy(strategyType, config);
     const exchangeName = exchangeService.getExchangeNameFromEnum(exchangeEnum);
+
+    // Grid/Martingale 전략 상태 복원
+    if (strategyType === 'GRID' || strategyType === 'MARTINGALE') {
+      const botForState = await prisma.bot.findUnique({
+        where: { id: botId },
+        select: { riskConfig: true },
+      });
+      const rc = botForState?.riskConfig as Record<string, unknown> | null;
+      const savedStrategyState = rc?.strategyState as Record<string, unknown> | undefined;
+      if (savedStrategyState) {
+        if (strategyType === 'GRID' && strategy instanceof GridStrategy) {
+          strategy.restoreState(savedStrategyState);
+          logger.info('Grid strategy state restored', { botId });
+        } else if (strategyType === 'MARTINGALE' && strategy instanceof MartingaleStrategy) {
+          strategy.restoreState(savedStrategyState);
+          logger.info('Martingale strategy state restored', { botId });
+        }
+      }
+    }
 
     if (mode === 'PAPER') {
       // DB에서 이전 Paper 상태 복원 시도
@@ -537,17 +631,35 @@ class BotRunnerService {
     }
 
     // setTimeout 체이닝: 이전 반복이 완료된 후에만 다음 반복 스케줄
-    const control: { running: boolean; stopped: boolean; timerId?: ReturnType<typeof setTimeout> } = { running: true, stopped: false };
+    const control: { running: boolean; stopped: boolean; timerId?: ReturnType<typeof setTimeout>; loopCount: number; peakEquity: number } = { running: true, stopped: false, loopCount: 0, peakEquity: 0 };
     this.activeBots.set(botId, control);
+
+    // REAL 모드: 시작 시 포지션 대사
+    if (mode === 'REAL' && cachedExchange) {
+      await this.reconcilePosition(botId, symbol, cachedExchange, 0).catch(() => {});
+    }
 
     const runLoop = async () => {
       if (control.stopped) return;
+      control.loopCount++;
 
       try {
         const exchange = cachedExchange;
         if (mode === 'REAL' && !exchange) {
           logger.warn('No API key found for running bot', { botId });
           return;
+        }
+
+        // 주기적 Paper 상태 저장 (크래시 복구용)
+        if (mode === 'PAPER' && control.loopCount % PAPER_SAVE_INTERVAL === 0) {
+          await this.savePaperState(botId).catch((err) => {
+            logger.warn('Periodic paper state save failed', { botId, error: String(err) });
+          });
+        }
+
+        // REAL 모드: 주기적 포지션 대사
+        if (mode === 'REAL' && exchange && control.loopCount % RECONCILE_INTERVAL === 0) {
+          await this.reconcilePosition(botId, symbol, exchange, 0).catch(() => {});
         }
 
         // OHLCV 데이터 가져오기
@@ -630,8 +742,27 @@ class BotRunnerService {
           return;
         }
 
-        // 일일/주간 손실 한도 확인
-        const riskCheck = await riskManager.checkRiskLimits(botId);
+        // 미실현 PnL 계산 (강화된 리스크 체크에 전달)
+        let unrealizedPnl = 0;
+        if (currentPosition && currentPosition.isOpen) {
+          unrealizedPnl = currentPosition.side === 'long'
+            ? (currentPrice - currentPosition.entryPrice) * currentPosition.amount
+            : (currentPosition.entryPrice - currentPrice) * currentPosition.amount;
+        }
+
+        // 강화된 리스크 체크 (미실현 PnL + MDD + 일일 거래 한도)
+        const riskCheck = await riskManager.checkRiskLimitsEnhanced(
+          botId, unrealizedPnl, control.peakEquity > 0 ? control.peakEquity : undefined
+        );
+
+        // 피크 에퀴티 업데이트 (MDD 추적용)
+        if (riskCheck.allowed) {
+          const currentEquity = (riskCheck.currentDailyLoss === 0 ? 10000 : 10000) + unrealizedPnl;
+          if (currentEquity > control.peakEquity) {
+            control.peakEquity = currentEquity;
+          }
+        }
+
         if (!riskCheck.allowed) {
           logger.warn('Risk limit reached, skipping trade', {
             botId, mode, reason: riskCheck.reason,
@@ -639,16 +770,74 @@ class BotRunnerService {
           await prisma.botLog.create({
             data: {
               botId,
-              level: 'WARN',
+              level: riskCheck.shouldEmergencyStop ? 'ERROR' : 'WARN',
               message: `리스크 한도 초과: ${riskCheck.reason}`,
             },
           }).catch(() => {});
+
+          // MDD 킬스위치: 봇 정지
+          if (riskCheck.shouldEmergencyStop) {
+            logger.error('MDD kill switch: stopping bot', { botId });
+            await prisma.bot.update({
+              where: { id: botId },
+              data: { status: 'ERROR' },
+            }).catch(() => {});
+            control.stopped = true;
+
+            // 열린 포지션 강제 청산
+            if (currentPosition && currentPosition.isOpen) {
+              await this.executeClose(
+                botId, symbol, exchangeName, mode, exchange ?? null,
+                currentPosition, currentPrice,
+                `MDD 킬스위치 발동: 낙폭 ${riskCheck.drawdownPercent.toFixed(2)}%`
+              );
+            }
+          }
           return;
         }
 
         // ===== 포지션 컨텍스트를 포함하여 전략 분석 =====
         const enrichedConfig = this.enrichConfigWithPosition(config, currentPosition, currentPrice);
-        const signal = strategy.analyze(ohlcvData, enrichedConfig);
+
+        // FUNDING_ARB 전략: analyzeWithFunding() 사용 (비동기 펀딩비 데이터 필요)
+        let signal: import('../strategies/base.strategy.js').TradeSignal | null = null;
+        if (strategyType === 'FUNDING_ARB') {
+          const { FundingArbStrategy } = await import('../strategies/funding-arb.strategy.js');
+          const fundingStrategy = strategy as InstanceType<typeof FundingArbStrategy>;
+          try {
+            const fundingSignal = await fundingStrategy.analyzeWithFunding(
+              symbol, currentPrice, ohlcvRaw
+            );
+            // FundingArbSignal → TradeSignal 매핑
+            if (fundingSignal.action === 'ENTER_LONG_FUNDING' || fundingSignal.action === 'ENTER_SHORT_FUNDING') {
+              signal = {
+                action: 'buy',
+                confidence: fundingSignal.confidence / 100,
+                reason: fundingSignal.reason,
+                price: currentPrice,
+                stopLoss: currentPrice * (1 - (enrichedConfig['stopLossPercent'] ?? 2) / 100),
+                metadata: {
+                  fundingRate: String(fundingSignal.fundingRate),
+                  annualizedRate: String(fundingSignal.annualizedRate),
+                  expectedProfit: String(fundingSignal.expectedProfit),
+                },
+              };
+            } else if (fundingSignal.action === 'EXIT') {
+              signal = {
+                action: 'sell',
+                confidence: fundingSignal.confidence / 100,
+                reason: fundingSignal.reason,
+                price: currentPrice,
+              };
+            }
+            // HOLD → signal remains null
+          } catch (err) {
+            logger.warn('FundingArb analyzeWithFunding failed, falling back', { error: String(err) });
+            signal = strategy.analyze(ohlcvData, enrichedConfig);
+          }
+        } else {
+          signal = strategy.analyze(ohlcvData, enrichedConfig);
+        }
 
         // hold 시그널 로깅 (Paper 모드)
         if (mode === 'PAPER' && (!signal || signal.action === 'hold')) {
@@ -735,6 +924,36 @@ class BotRunnerService {
               data: (signal.metadata ?? {}) as Prisma.InputJsonValue,
             },
           });
+
+          // Grid/Martingale 전략 상태 영속화 (거래 후)
+          if (strategyType === 'GRID' || strategyType === 'MARTINGALE') {
+            try {
+              const strategyState = (strategyType === 'GRID' && strategy instanceof GridStrategy)
+                ? strategy.serializeState()
+                : (strategyType === 'MARTINGALE' && strategy instanceof MartingaleStrategy)
+                  ? strategy.serializeState()
+                  : null;
+
+              if (strategyState) {
+                const existingBot = await prisma.bot.findUnique({
+                  where: { id: botId },
+                  select: { riskConfig: true },
+                });
+                const existingRc = (existingBot?.riskConfig as Record<string, unknown>) ?? {};
+                await prisma.bot.update({
+                  where: { id: botId },
+                  data: {
+                    riskConfig: {
+                      ...existingRc,
+                      strategyState,
+                    } as Prisma.InputJsonValue,
+                  },
+                });
+              }
+            } catch (saveErr) {
+              logger.warn('Failed to save strategy state', { botId, error: String(saveErr) });
+            }
+          }
         }
       } catch (err) {
         logger.error('Bot loop error', { botId, error: String(err) });
@@ -778,13 +997,13 @@ class BotRunnerService {
     const balance = paper.getBalance();
     const capital = balance['USDT']?.total ?? 0;
 
-    // 동적 주문 수량 계산
+    // 동적 주문 수량 계산 (포지션 누적 상한 적용)
     let orderAmount: number;
     if (signal.action === 'sell' && currentPosition && currentPosition.isOpen) {
       // 매도 시 보유 수량 전체 매도
       orderAmount = currentPosition.amount;
     } else {
-      orderAmount = this.calculateOrderAmount(capital, currentPrice, atr, signal);
+      orderAmount = this.calculateOrderAmount(capital, currentPrice, atr, signal, currentPosition);
       // 최소 주문 금액 체크
       if (orderAmount * currentPrice < MIN_ORDER_VALUE_USDT) {
         logger.debug('Order value too small, skipping', {
@@ -853,6 +1072,9 @@ class BotRunnerService {
           pnl: realizedPnl,
         },
       });
+
+      // 서킷 브레이커 메모리 추적 업데이트
+      if (realizedPnl !== null) riskManager.recordTradeResult(botId, realizedPnl);
 
       const updatedBalance = paper.getBalance();
       const paperUsdtBalance = updatedBalance['USDT']?.total ?? 0;
@@ -935,12 +1157,12 @@ class BotRunnerService {
       capital = portfolio?.totalValue ?? 10000;
     }
 
-    // 동적 주문 수량 계산
+    // 동적 주문 수량 계산 (포지션 누적 상한 적용)
     let orderAmount: number;
     if (signal.action === 'sell' && currentPosition && currentPosition.isOpen) {
       orderAmount = currentPosition.amount;
     } else {
-      orderAmount = this.calculateOrderAmount(capital, currentPrice, atr, signal);
+      orderAmount = this.calculateOrderAmount(capital, currentPrice, atr, signal, currentPosition);
 
       // 변동성 스케일링 적용
       if (atr > 0) {
@@ -959,20 +1181,115 @@ class BotRunnerService {
 
     if (orderAmount <= 0) return;
 
+    // 사전 유동성 검사 (REAL 모드)
     try {
+      const orderBook = await exchangeService.getOrderBook(exchange, symbol, 50);
+      const bids = orderBook.bids as [number, number][];
+      const asks = orderBook.asks as [number, number][];
+
+      const preCheck = executionService.preTradeCheck(
+        bids, asks, signal.action as 'buy' | 'sell', orderAmount, currentPrice
+      );
+
+      if (!preCheck.allowed) {
+        logger.warn('Pre-trade check failed, skipping order', {
+          botId, symbol, reason: preCheck.reason,
+          estimatedSlippage: preCheck.estimatedSlippage,
+        });
+        await prisma.botLog.create({
+          data: {
+            botId,
+            level: 'WARN',
+            message: `유동성 검사 실패: ${preCheck.reason}`,
+          },
+        }).catch(() => {});
+        return;
+      }
+
+      // 최대 주문량으로 cap
+      if (preCheck.maxSafeSize > 0 && orderAmount > preCheck.maxSafeSize) {
+        logger.info('Order amount capped by liquidity', {
+          original: orderAmount, capped: preCheck.maxSafeSize,
+        });
+        orderAmount = preCheck.maxSafeSize;
+      }
+    } catch (obErr) {
+      logger.warn('Pre-trade check skipped (orderbook fetch failed)', { error: String(obErr) });
+    }
+
+    // 멱등성 키 생성
+    const idempotencyKey = `${botId}:${signal.action}:${Date.now()}`;
+
+    try {
+      // OrderRecord 생성 (PENDING 상태)
+      const orderRecord = await prisma.orderRecord.create({
+        data: {
+          botId,
+          symbol,
+          side: signal.action === 'buy' ? 'BUY' : 'SELL',
+          type: 'MARKET',
+          requestedAmount: orderAmount,
+          idempotencyKey,
+          status: 'PENDING',
+        },
+      });
+
       const order = await exchangeService.createOrder(
         exchange,
         symbol,
         signal.action as 'buy' | 'sell',
         'market',
-        orderAmount
+        orderAmount,
+        undefined,
+        idempotencyKey
       );
 
-      const fillPrice = order.average ?? order.price ?? currentPrice;
-      const filledAmount = order.filled ?? orderAmount;
-      const fee = order.fee?.cost ?? 0;
+      // 체결 확인: fetchOrder로 폴링
+      let confirmedOrder = order;
+      try {
+        confirmedOrder = await exchangeService.fetchOrder(exchange, order.id, symbol);
+      } catch (fetchErr) {
+        logger.warn('fetchOrder failed, using initial order data', {
+          orderId: order.id, error: String(fetchErr),
+        });
+      }
 
-      // 포지션 업데이트
+      const fillPrice = confirmedOrder.average ?? confirmedOrder.price ?? currentPrice;
+      const filledAmount = confirmedOrder.filled ?? 0;
+      const fee = confirmedOrder.fee?.cost ?? 0;
+
+      // OrderRecord 업데이트
+      const orderStatus = filledAmount <= 0 ? 'FAILED'
+        : filledAmount < orderAmount ? 'PARTIALLY_FILLED'
+        : 'FILLED';
+
+      await prisma.orderRecord.update({
+        where: { id: orderRecord.id },
+        data: {
+          exchangeOrderId: confirmedOrder.id,
+          filledAmount,
+          avgFillPrice: fillPrice,
+          status: orderStatus as 'PENDING' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'FAILED',
+        },
+      }).catch(() => {});
+
+      // 체결 실패 (filled=0): 포지션 업데이트 안 함
+      if (filledAmount <= 0) {
+        logger.warn('Order not filled, skipping position update', {
+          botId, orderId: confirmedOrder.id, status: confirmedOrder.status,
+        });
+        return;
+      }
+
+      // 부분 체결 경고
+      if (filledAmount < orderAmount * 0.99) {
+        logger.warn('Partial fill detected', {
+          botId, requested: orderAmount, filled: filledAmount,
+          fillRatio: (filledAmount / orderAmount * 100).toFixed(1) + '%',
+        });
+      }
+
+      // 포지션 업데이트 (실제 체결량 사용)
       if (signal.action === 'buy') {
         this.openPosition(botId, symbol, 'long', fillPrice, filledAmount, signal.stopLoss, signal.takeProfit);
       } else {
@@ -985,6 +1302,11 @@ class BotRunnerService {
         realizedPnl = (fillPrice - currentPosition.entryPrice) * filledAmount - fee;
       }
 
+      // TCA (Transaction Cost Analysis)
+      const tca = executionService.calculateTCA(
+        currentPrice, fillPrice, filledAmount, fee, signal.action as 'buy' | 'sell'
+      );
+
       await prisma.trade.create({
         data: {
           botId,
@@ -995,15 +1317,32 @@ class BotRunnerService {
           amount: filledAmount,
           fee,
           pnl: realizedPnl,
+          metadata: {
+            idempotencyKey,
+            orderRecordId: orderRecord.id,
+            requestedAmount: orderAmount,
+            exchangeOrderId: confirmedOrder.id,
+            tca: {
+              implementationShortfall: tca.implementationShortfall,
+              effectiveSpread: tca.effectiveSpread,
+              totalCost: tca.totalCost,
+              marketImpact: tca.marketImpact,
+            },
+          } as unknown as Prisma.InputJsonValue,
         },
       });
 
-      logger.info('Real trade executed', {
+      // 서킷 브레이커 메모리 추적 업데이트
+      if (realizedPnl !== null) riskManager.recordTradeResult(botId, realizedPnl);
+
+      logger.info('Real trade executed (confirmed)', {
         botId, symbol,
         side: signal.action,
         price: fillPrice,
         amount: filledAmount,
+        requested: orderAmount,
         pnl: realizedPnl,
+        tca,
       });
     } catch (err) {
       logger.error('Real trade execution failed', { botId, symbol, error: String(err) });
@@ -1067,6 +1406,9 @@ class BotRunnerService {
           },
         });
 
+        // 서킷 브레이커 메모리 추적 업데이트
+        riskManager.recordTradeResult(botId, pnl);
+
         logger.warn('Position closed by SL/TP', {
           botId, symbol, reason, pnl,
         });
@@ -1094,6 +1436,7 @@ class BotRunnerService {
     if (control) {
       control.stopped = true;
       control.running = false;
+      logger.info('Bot stopped', { botId, loopCount: control.loopCount });
       if (control.timerId) {
         clearTimeout(control.timerId);
         control.timerId = undefined;
@@ -1105,6 +1448,7 @@ class BotRunnerService {
       });
 
       // Paper 상태 메모리 정리
+      this.paperTradeLogs.delete(botId);
       this.paperBalances.delete(botId);
       this.paperPositions.delete(botId);
       this.activeBots.delete(botId);
@@ -1138,6 +1482,7 @@ class BotRunnerService {
     await Promise.all(savePromises);
 
     this.activeBots.clear();
+    this.paperTradeLogs.clear();
     this.paperBalances.clear();
     this.paperPositions.clear();
     if (count > 0) {

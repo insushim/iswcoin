@@ -39,6 +39,20 @@ export interface ExecutionResult {
   slippage: number;
 }
 
+export interface PreTradeCheckResult {
+  allowed: boolean;
+  estimatedSlippage: number;   // 예상 슬리피지 (%)
+  maxSafeSize: number;         // 0.1% 슬리피지 내 최대 주문량
+  reason: string;
+}
+
+export interface TCAResult {
+  implementationShortfall: number; // 기대가 vs 실제 체결가 차이 (%)
+  effectiveSpread: number;         // 유효 스프레드 (%)
+  totalCost: number;               // 총 거래 비용 ($)
+  marketImpact: number;            // 시장 충격 (%)
+}
+
 export interface KimchiPremium {
   symbol: string;
   binancePrice: number;
@@ -320,6 +334,149 @@ export class ExecutionService {
     });
 
     return result;
+  }
+
+  /**
+   * 사전 유동성 검사: 호가창을 순회하여 예상 슬리피지 계산
+   * 슬리피지 > 0.5% 시 거래 거부
+   */
+  preTradeCheck(
+    bids: [number, number][],
+    asks: [number, number][],
+    side: 'buy' | 'sell',
+    amount: number,
+    currentPrice: number
+  ): PreTradeCheckResult {
+    const book = side === 'buy' ? asks : bids;
+    if (book.length === 0 || currentPrice <= 0) {
+      return { allowed: false, estimatedSlippage: 0, maxSafeSize: 0, reason: '호가창 데이터 없음' };
+    }
+
+    // 예상 체결가 계산 (호가창 순회)
+    let remainingAmount = amount;
+    let totalCost = 0;
+
+    for (const [price, size] of book) {
+      const fillAmount = Math.min(remainingAmount, size);
+      totalCost += fillAmount * price;
+      remainingAmount -= fillAmount;
+      if (remainingAmount <= 0) break;
+    }
+
+    if (remainingAmount > 0) {
+      return {
+        allowed: false,
+        estimatedSlippage: 999,
+        maxSafeSize: amount - remainingAmount,
+        reason: `호가창 유동성 부족: ${(remainingAmount / amount * 100).toFixed(1)}% 미체결 예상`,
+      };
+    }
+
+    const avgFillPrice = totalCost / amount;
+    const slippage = Math.abs(avgFillPrice - currentPrice) / currentPrice * 100;
+
+    const maxSlippage = 0.5; // 0.5%
+    if (slippage > maxSlippage) {
+      logger.warn('Pre-trade check: slippage too high', { side, amount, slippage, maxSlippage });
+      return {
+        allowed: false,
+        estimatedSlippage: slippage,
+        maxSafeSize: this.calculateMaxOrderSize(book, currentPrice, 0.1),
+        reason: `예상 슬리피지 ${slippage.toFixed(3)}% > ${maxSlippage}% 한도 초과`,
+      };
+    }
+
+    return {
+      allowed: true,
+      estimatedSlippage: slippage,
+      maxSafeSize: this.calculateMaxOrderSize(book, currentPrice, 0.1),
+      reason: `예상 슬리피지 ${slippage.toFixed(3)}% — OK`,
+    };
+  }
+
+  /**
+   * 호가창 기반 최대 주문량 계산: maxSlippagePct 이내 체결 가능한 수량
+   */
+  calculateMaxOrderSize(
+    book: [number, number][],
+    currentPrice: number,
+    maxSlippagePct: number = 0.1
+  ): number {
+    if (book.length === 0 || currentPrice <= 0) return 0;
+
+    let totalAmount = 0;
+    let totalCost = 0;
+
+    for (const [price, size] of book) {
+      // 이 호가까지 체결했을 때의 평균가
+      const newTotalCost = totalCost + price * size;
+      const newTotalAmount = totalAmount + size;
+      const avgPrice = newTotalCost / newTotalAmount;
+      const slippage = Math.abs(avgPrice - currentPrice) / currentPrice * 100;
+
+      if (slippage > maxSlippagePct) {
+        // 이 호가에서 슬리피지 한도 초과 → 부분 체결량 계산
+        // 역산: 얼마까지 체결하면 slippage == maxSlippagePct인가
+        const maxAvgPrice = currentPrice * (1 + maxSlippagePct / 100);
+        // totalCost + price * x = maxAvgPrice * (totalAmount + x)
+        // x * (price - maxAvgPrice) = maxAvgPrice * totalAmount - totalCost
+        if (price !== maxAvgPrice) {
+          const partialSize = (maxAvgPrice * totalAmount - totalCost) / (price - maxAvgPrice);
+          if (partialSize > 0) {
+            totalAmount += Math.min(partialSize, size);
+          }
+        }
+        break;
+      }
+
+      totalAmount += size;
+      totalCost = newTotalCost;
+    }
+
+    return totalAmount;
+  }
+
+  /**
+   * 거래 후 TCA (Transaction Cost Analysis)
+   * 기대가 vs 실제 체결가 비교
+   */
+  calculateTCA(
+    expectedPrice: number,
+    actualAvgPrice: number,
+    amount: number,
+    fee: number,
+    side: 'buy' | 'sell',
+    midPrice?: number
+  ): TCAResult {
+    // Implementation Shortfall: 기대가 대비 실제 체결 비용 차이
+    const priceDiff = side === 'buy'
+      ? actualAvgPrice - expectedPrice
+      : expectedPrice - actualAvgPrice;
+    const implementationShortfall = expectedPrice > 0
+      ? (priceDiff / expectedPrice) * 100
+      : 0;
+
+    // Effective Spread: 체결가와 중간가의 차이
+    const mid = midPrice ?? expectedPrice;
+    const effectiveSpread = mid > 0
+      ? (Math.abs(actualAvgPrice - mid) / mid) * 200  // 왕복 기준
+      : 0;
+
+    // Market Impact: 순수 가격 충격 (수수료 제외)
+    const marketImpact = expectedPrice > 0
+      ? (Math.abs(priceDiff) / expectedPrice) * 100
+      : 0;
+
+    // Total Cost: 슬리피지 비용 + 수수료
+    const slippageCost = Math.abs(priceDiff) * amount;
+    const totalCost = slippageCost + fee;
+
+    return {
+      implementationShortfall: Math.round(implementationShortfall * 10000) / 10000,
+      effectiveSpread: Math.round(effectiveSpread * 10000) / 10000,
+      totalCost: Math.round(totalCost * 100) / 100,
+      marketImpact: Math.round(marketImpact * 10000) / 10000,
+    };
   }
 
   private aggregateResults(

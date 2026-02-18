@@ -155,4 +155,20 @@ export class MartingaleStrategy extends BaseStrategy {
   getCurrentLevel(): number {
     return this.currentLevel;
   }
+
+  serializeState(): Record<string, unknown> {
+    return {
+      currentLevel: this.currentLevel,
+      lastEntryPrice: this.lastEntryPrice,
+      positionActive: this.positionActive,
+      consecutiveLosses: this.consecutiveLosses,
+    };
+  }
+
+  restoreState(state: Record<string, unknown>): void {
+    if (typeof state['currentLevel'] === 'number') this.currentLevel = state['currentLevel'];
+    if (typeof state['lastEntryPrice'] === 'number') this.lastEntryPrice = state['lastEntryPrice'];
+    if (typeof state['positionActive'] === 'boolean') this.positionActive = state['positionActive'];
+    if (typeof state['consecutiveLosses'] === 'number') this.consecutiveLosses = state['consecutiveLosses'];
+  }
 }

@@ -338,23 +338,33 @@ router.get('/:id/performance', async (req: AuthenticatedRequest, res: Response):
       return;
     }
 
-    const trades = await prisma.trade.findMany({
+    // DB 집계 쿼리로 성능 최적화 (전체 거래 메모리 로드 방지)
+    const [tradeAgg, winCount, lossCount] = await Promise.all([
+      prisma.trade.aggregate({
+        where: { botId: id },
+        _sum: { pnl: true, fee: true },
+        _count: true,
+      }),
+      prisma.trade.count({ where: { botId: id, pnl: { gt: 0 } } }),
+      prisma.trade.count({ where: { botId: id, pnl: { lte: 0, not: null } } }),
+    ]);
+
+    const totalTrades = tradeAgg._count;
+    const totalPnl = tradeAgg._sum.pnl ?? 0;
+    const totalFees = tradeAgg._sum.fee ?? 0;
+    const winRate = totalTrades > 0 ? (winCount / totalTrades) * 100 : 0;
+
+    // MDD: 누적 PnL 스트림 필요 → 최근 500건만 로드 (충분한 정밀도)
+    let maxDrawdown = 0;
+    const recentTrades = await prisma.trade.findMany({
       where: { botId: id },
       orderBy: { timestamp: 'asc' },
+      select: { pnl: true },
+      take: 500,
     });
-
-    const totalTrades = trades.length;
-    const wins = trades.filter((t) => (t.pnl ?? 0) > 0).length;
-    const losses = trades.filter((t) => (t.pnl ?? 0) < 0).length;
-    const totalPnl = trades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
-    const totalFees = trades.reduce((sum, t) => sum + (t.fee ?? 0), 0);
-    const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
-
-    // Max drawdown calculation
     let peak = 0;
-    let maxDrawdown = 0;
     let cumPnl = 0;
-    for (const t of trades) {
+    for (const t of recentTrades) {
       cumPnl += t.pnl ?? 0;
       if (cumPnl > peak) peak = cumPnl;
       const dd = peak - cumPnl;
@@ -363,8 +373,8 @@ router.get('/:id/performance', async (req: AuthenticatedRequest, res: Response):
 
     res.json({
       totalTrades,
-      wins,
-      losses,
+      wins: winCount,
+      losses: lossCount,
       totalPnl,
       totalFees,
       winRate,

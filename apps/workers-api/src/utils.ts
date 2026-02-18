@@ -24,6 +24,16 @@ export async function hashPassword(password: string): Promise<string> {
   return `pbkdf2:${saltHex}:${hashHex}`;
 }
 
+// Constant-time 문자열 비교 (타이밍 공격 방지)
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   // PBKDF2 형식: pbkdf2:salt:hash
   if (storedHash.startsWith('pbkdf2:')) {
@@ -39,14 +49,14 @@ export async function verifyPassword(password: string, storedHash: string): Prom
       256
     );
     const hashHex = Array.from(new Uint8Array(derivedBits)).map(b => b.toString(16).padStart(2, '0')).join('');
-    return hashHex === parts[2];
+    return constantTimeEqual(hashHex, parts[2]!);
   }
   // 레거시 SHA-256 호환 (기존 사용자용)
   const encoder = new TextEncoder();
   const data = encoder.encode(password);
   const hash = await crypto.subtle.digest('SHA-256', data);
   const legacyHash = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return legacyHash === storedHash;
+  return constantTimeEqual(legacyHash, storedHash);
 }
 
 export async function createJWT(payload: Record<string, unknown>, secret: string): Promise<string> {

@@ -74,6 +74,14 @@ enum LogLevel {
   ERROR
 }
 
+enum OrderStatus {
+  PENDING
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  FAILED
+}
+
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -126,7 +134,10 @@ model Bot {
   trades         Trade[]
   backtestResults BacktestResult[]
   logs           BotLog[]
+  orderRecords   OrderRecord[]
 
+  @@index([userId, status])
+  @@index([status])
   @@map("bots")
 }
 
@@ -140,6 +151,7 @@ model Trade {
   amount    Float
   fee       Float     @default(0)
   pnl       Float?
+  metadata  Json?
   timestamp DateTime  @default(now())
 
   bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
@@ -219,6 +231,30 @@ model BotLog {
 
   @@index([botId, createdAt])
   @@map("bot_logs")
+}
+
+model OrderRecord {
+  id               String      @id @default(cuid())
+  botId            String
+  symbol           String
+  side             TradeSide
+  type             OrderType
+  requestedAmount  Float
+  filledAmount     Float       @default(0)
+  avgFillPrice     Float?
+  exchangeOrderId  String?
+  idempotencyKey   String?
+  status           OrderStatus @default(PENDING)
+  metadata         Json?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId, createdAt])
+  @@index([idempotencyKey])
+  @@index([exchangeOrderId])
+  @@map("order_records")
 }
 
 model UserSettings {

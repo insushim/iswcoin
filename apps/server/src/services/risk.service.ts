@@ -21,6 +21,10 @@ export interface RiskConfig {
   // 변동성 조절
   volatilityScalingEnabled: boolean;
   targetVolatilityPct: number;
+  // Phase 1.3: 프로덕션 안전 장치
+  maxDrawdownPercent: number;           // MDD 킬스위치 (전체 계좌)
+  maxDailyTradeCount: number;           // 일일 거래 횟수 상한
+  maxCorrelatedExposurePercent: number; // 상관 노출 한도
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
@@ -39,6 +43,9 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
   atrMultiplierTP: 3.0,
   volatilityScalingEnabled: true,
   targetVolatilityPct: 2.0,
+  maxDrawdownPercent: 15,
+  maxDailyTradeCount: 50,
+  maxCorrelatedExposurePercent: 30,
 };
 
 export interface PositionSizeResult {
@@ -53,6 +60,12 @@ export interface RiskCheckResult {
   reason: string;
   currentDailyLoss: number;
   currentWeeklyLoss: number;
+}
+
+export interface RiskCheckEnhancedResult extends RiskCheckResult {
+  dailyTradeCount: number;
+  drawdownPercent: number;
+  shouldEmergencyStop: boolean; // MDD 킬스위치 발동 여부
 }
 
 export interface TieredTakeProfit {
@@ -190,6 +203,135 @@ export class RiskManager {
       reason: 'Within risk limits',
       currentDailyLoss: dailyLossPercent,
       currentWeeklyLoss: weeklyLossPercent,
+    };
+  }
+
+  /**
+   * 강화된 리스크 체크: 미실현 PnL 포함, MDD 킬스위치, 일일 거래 한도
+   */
+  async checkRiskLimitsEnhanced(
+    botId: string,
+    unrealizedPnl: number = 0,
+    peakEquity?: number
+  ): Promise<RiskCheckEnhancedResult> {
+    const { startOfDay, startOfWeek } = getDateRanges();
+
+    const bot = await prisma.bot.findUnique({
+      where: { id: botId },
+      select: { userId: true },
+    });
+
+    if (!bot) {
+      return {
+        allowed: false,
+        reason: 'Bot not found',
+        currentDailyLoss: 0,
+        currentWeeklyLoss: 0,
+        dailyTradeCount: 0,
+        drawdownPercent: 0,
+        shouldEmergencyStop: false,
+      };
+    }
+
+    const [portfolio, dailyAgg, weeklyAgg, dailyTradeCount] = await Promise.all([
+      prisma.portfolio.findFirst({
+        where: { userId: bot.userId },
+        orderBy: { updatedAt: 'desc' },
+        select: { totalValue: true },
+      }),
+      prisma.trade.aggregate({
+        where: { botId, timestamp: { gte: startOfDay } },
+        _sum: { pnl: true },
+      }),
+      prisma.trade.aggregate({
+        where: { botId, timestamp: { gte: startOfWeek } },
+        _sum: { pnl: true },
+      }),
+      prisma.trade.count({
+        where: { botId, timestamp: { gte: startOfDay } },
+      }),
+    ]);
+
+    const totalCapital = portfolio?.totalValue ?? 10000;
+    // 실현 + 미실현 PnL 합산
+    const dailyPnL = (dailyAgg._sum.pnl ?? 0) + unrealizedPnl;
+    const weeklyPnL = (weeklyAgg._sum.pnl ?? 0) + unrealizedPnl;
+
+    const dailyLossPercent = totalCapital > 0 ? (Math.abs(Math.min(0, dailyPnL)) / totalCapital) * 100 : 0;
+    const weeklyLossPercent = totalCapital > 0 ? (Math.abs(Math.min(0, weeklyPnL)) / totalCapital) * 100 : 0;
+
+    // MDD 킬스위치: 전체 계좌 기준
+    const currentEquity = totalCapital + unrealizedPnl;
+    const peak = peakEquity ?? totalCapital;
+    const drawdownPercent = peak > 0 ? ((peak - currentEquity) / peak) * 100 : 0;
+    const shouldEmergencyStop = drawdownPercent >= this.riskConfig.maxDrawdownPercent;
+
+    if (shouldEmergencyStop) {
+      logger.error('MDD KILL SWITCH triggered', {
+        botId, drawdownPercent, maxDrawdown: this.riskConfig.maxDrawdownPercent,
+        peak, currentEquity,
+      });
+      return {
+        allowed: false,
+        reason: `MDD 킬스위치 발동: 낙폭 ${drawdownPercent.toFixed(2)}% >= ${this.riskConfig.maxDrawdownPercent}% (최고점 ${peak.toFixed(0)}, 현재 ${currentEquity.toFixed(0)})`,
+        currentDailyLoss: dailyLossPercent,
+        currentWeeklyLoss: weeklyLossPercent,
+        dailyTradeCount,
+        drawdownPercent,
+        shouldEmergencyStop: true,
+      };
+    }
+
+    // 일일 거래 횟수 한도
+    if (dailyTradeCount >= this.riskConfig.maxDailyTradeCount) {
+      logger.warn('Daily trade count limit reached', { botId, dailyTradeCount });
+      return {
+        allowed: false,
+        reason: `일일 거래 횟수 한도 초과: ${dailyTradeCount} >= ${this.riskConfig.maxDailyTradeCount}`,
+        currentDailyLoss: dailyLossPercent,
+        currentWeeklyLoss: weeklyLossPercent,
+        dailyTradeCount,
+        drawdownPercent,
+        shouldEmergencyStop: false,
+      };
+    }
+
+    // 일일 손실 한도 (미실현 PnL 포함)
+    if (dailyLossPercent >= this.riskConfig.maxDailyRiskPercent) {
+      logger.warn('Daily risk limit reached (incl. unrealized)', { botId, dailyLossPercent });
+      return {
+        allowed: false,
+        reason: `일일 손실 한도 초과 (미실현 포함): ${dailyLossPercent.toFixed(2)}% >= ${this.riskConfig.maxDailyRiskPercent}%`,
+        currentDailyLoss: dailyLossPercent,
+        currentWeeklyLoss: weeklyLossPercent,
+        dailyTradeCount,
+        drawdownPercent,
+        shouldEmergencyStop: false,
+      };
+    }
+
+    // 주간 손실 한도 (미실현 PnL 포함)
+    if (weeklyLossPercent >= this.riskConfig.maxWeeklyRiskPercent) {
+      logger.warn('Weekly risk limit reached (incl. unrealized)', { botId, weeklyLossPercent });
+      return {
+        allowed: false,
+        reason: `주간 손실 한도 초과 (미실현 포함): ${weeklyLossPercent.toFixed(2)}% >= ${this.riskConfig.maxWeeklyRiskPercent}%`,
+        currentDailyLoss: dailyLossPercent,
+        currentWeeklyLoss: weeklyLossPercent,
+        dailyTradeCount,
+        drawdownPercent,
+        shouldEmergencyStop: false,
+      };
+    }
+
+    return {
+      allowed: true,
+      reason: 'Within risk limits',
+      currentDailyLoss: dailyLossPercent,
+      currentWeeklyLoss: weeklyLossPercent,
+      dailyTradeCount,
+      drawdownPercent,
+      shouldEmergencyStop: false,
     };
   }
 
@@ -348,44 +490,52 @@ export class RiskManager {
     return basePositionSize * clampedScale;
   }
 
+  // 메모리 기반 연속 손실 추적 (매 루프 DB 쿼리 제거)
+  private consecutiveLossTracker: Map<string, { count: number; lastLossTime: number }> = new Map();
+
   /**
-   * 서킷 브레이커: 연속 손실 감지 시 거래 일시 중단
+   * 거래 결과 기록 (서킷 브레이커용 메모리 추적)
+   */
+  recordTradeResult(botId: string, pnl: number): void {
+    const tracker = this.consecutiveLossTracker.get(botId) ?? { count: 0, lastLossTime: 0 };
+    if (pnl < 0) {
+      tracker.count++;
+      tracker.lastLossTime = Date.now();
+    } else {
+      tracker.count = 0;
+    }
+    this.consecutiveLossTracker.set(botId, tracker);
+  }
+
+  /**
+   * 서킷 브레이커: 연속 손실 감지 시 거래 일시 중단 (메모리 기반, DB 쿼리 없음)
    */
   async checkCircuitBreaker(botId: string): Promise<{
     triggered: boolean;
     consecutiveLosses: number;
     cooldownRemainingMs: number;
   }> {
-    const recentTrades = await prisma.trade.findMany({
-      where: { botId },
-      orderBy: { timestamp: 'desc' },
-      take: this.riskConfig.maxConsecutiveLosses + 1,
-    });
-
-    let consecutiveLosses = 0;
-    for (const trade of recentTrades) {
-      if ((trade.pnl ?? 0) < 0) {
-        consecutiveLosses++;
-      } else {
-        break;
-      }
+    const tracker = this.consecutiveLossTracker.get(botId);
+    if (!tracker) {
+      return { triggered: false, consecutiveLosses: 0, cooldownRemainingMs: 0 };
     }
 
-    if (consecutiveLosses >= this.riskConfig.maxConsecutiveLosses) {
-      const lastLoss = recentTrades[0];
-      if (lastLoss) {
-        const elapsed = Date.now() - lastLoss.timestamp.getTime();
-        const remaining = this.riskConfig.circuitBreakerCooldownMs - elapsed;
+    const consecutiveLosses = tracker.count;
 
-        if (remaining > 0) {
-          logger.warn('Circuit breaker active', {
-            botId,
-            consecutiveLosses,
-            cooldownRemainingMs: remaining,
-          });
-          return { triggered: true, consecutiveLosses, cooldownRemainingMs: remaining };
-        }
+    if (consecutiveLosses >= this.riskConfig.maxConsecutiveLosses) {
+      const elapsed = Date.now() - tracker.lastLossTime;
+      const remaining = this.riskConfig.circuitBreakerCooldownMs - elapsed;
+
+      if (remaining > 0) {
+        logger.warn('Circuit breaker active', {
+          botId,
+          consecutiveLosses,
+          cooldownRemainingMs: remaining,
+        });
+        return { triggered: true, consecutiveLosses, cooldownRemainingMs: remaining };
       }
+      // 쿨다운 만료 → 카운터 리셋
+      tracker.count = 0;
     }
 
     return { triggered: false, consecutiveLosses, cooldownRemainingMs: 0 };

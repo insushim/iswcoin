@@ -67,6 +67,15 @@ const rateLimit = (windowMs: number, max: number) => {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+
+    // Map 크기 상한 (DDoS 방어)
+    if (requests.size > 100_000) {
+      for (const [key, rec] of requests) {
+        if (now > rec.resetTime) requests.delete(key);
+        if (requests.size <= 50_000) break;
+      }
+    }
+
     const record = requests.get(ip);
 
     if (!record || now > record.resetTime) {

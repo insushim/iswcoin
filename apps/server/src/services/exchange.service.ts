@@ -250,14 +250,22 @@ export class ExchangeService {
   private circuitBreakers: Map<string, CircuitBreaker> = new Map();
   private cache: Map<string, { data: unknown; expiry: number }> = new Map();
   private cacheCleanupTimer: ReturnType<typeof setInterval>;
+  // 진행중 주문 추적 (중복 방지)
+  private inFlightOrders: Map<string, { orderId: string; timestamp: number }> = new Map();
 
   constructor() {
-    // 60초마다 만료된 캐시 정리 (메모리 누수 방지)
+    // 60초마다 만료된 캐시 + inFlightOrders 정리 (메모리 누수 방지)
     this.cacheCleanupTimer = setInterval(() => {
       const now = Date.now();
       for (const [key, entry] of this.cache) {
         if (now >= entry.expiry) {
           this.cache.delete(key);
+        }
+      }
+      // inFlightOrders 5분 초과분 정리 (setTimeout 누적 방지)
+      for (const [key, entry] of this.inFlightOrders) {
+        if (now - entry.timestamp > 300_000) {
+          this.inFlightOrders.delete(key);
         }
       }
     }, 60_000);
@@ -387,15 +395,84 @@ export class ExchangeService {
     side: 'buy' | 'sell',
     type: 'market' | 'limit',
     amount: number,
-    price?: number
+    price?: number,
+    idempotencyKey?: string
   ): Promise<Order> {
+    // 멱등성: 동일 키로 이미 주문이 진행중이면 차단
+    if (idempotencyKey) {
+      const existing = this.inFlightOrders.get(idempotencyKey);
+      if (existing) {
+        logger.warn('Duplicate order blocked by idempotency key', {
+          idempotencyKey, existingOrderId: existing.orderId,
+        });
+        throw new Error(`Duplicate order: idempotencyKey ${idempotencyKey} already in flight`);
+      }
+    }
+
     try {
-      logger.info('Creating order', { symbol, side, type, amount, price });
+      logger.info('Creating order', { symbol, side, type, amount, price, idempotencyKey });
       const order = await exchange.createOrder(symbol, type, side, amount, price);
       logger.info('Order created', { orderId: order.id, status: order.status });
+
+      // 진행중 주문 추적 (정리는 cacheCleanupTimer에서 일괄 처리)
+      if (idempotencyKey) {
+        this.inFlightOrders.set(idempotencyKey, { orderId: order.id, timestamp: Date.now() });
+      }
+
       return order;
     } catch (err) {
       logger.error('Failed to create order', { symbol, side, type, error: String(err) });
+      throw err;
+    }
+  }
+
+  /**
+   * 주문 체결 확인 (폴링, 최대 5회 지수 백오프)
+   */
+  async fetchOrder(
+    exchange: Exchange,
+    orderId: string,
+    symbol: string,
+    maxAttempts: number = 5
+  ): Promise<Order> {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const order = await exchange.fetchOrder(orderId, symbol);
+
+        if (order.status === 'closed' || order.status === 'canceled' || order.status === 'expired') {
+          logger.info('Order confirmed', {
+            orderId, status: order.status, filled: order.filled, average: order.average,
+          });
+          return order;
+        }
+
+        // 아직 체결 안됨 → 대기 후 재시도
+        if (attempt < maxAttempts) {
+          const backoff = 1000 * Math.pow(2, attempt - 1); // 1s, 2s, 4s, 8s
+          logger.debug('Order not yet filled, waiting', { orderId, attempt, backoff });
+          await new Promise((resolve) => setTimeout(resolve, backoff));
+        }
+      } catch (err) {
+        logger.warn('fetchOrder attempt failed', { orderId, attempt, error: String(err) });
+        if (attempt === maxAttempts) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+
+    // 최대 시도 후에도 미체결 → 마지막 상태 반환
+    return exchange.fetchOrder(orderId, symbol);
+  }
+
+  /**
+   * 미체결 주문 목록 조회 (포지션 대사용)
+   */
+  async fetchOpenOrders(exchange: Exchange, symbol?: string): Promise<Order[]> {
+    try {
+      const orders = await exchange.fetchOpenOrders(symbol);
+      logger.debug('Open orders fetched', { symbol, count: orders.length });
+      return orders;
+    } catch (err) {
+      logger.error('Failed to fetch open orders', { symbol, error: String(err) });
       throw err;
     }
   }
@@ -518,6 +595,7 @@ export class ExchangeService {
     this.exchanges.clear();
     this.paperExchanges.clear();
     this.circuitBreakers.clear();
+    this.inFlightOrders.clear();
   }
 
   getExchangeNameFromEnum(exchangeEnum: string): SupportedExchange {

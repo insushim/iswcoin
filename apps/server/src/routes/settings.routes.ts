@@ -39,9 +39,7 @@ router.get('/api-keys', async (req: AuthenticatedRequest, res: Response): Promis
       id: k.id,
       exchange: k.exchange,
       label: k.label,
-      keyPreview: k.apiKey.length > 8
-        ? `${k.apiKey.slice(0, 4)}...${k.apiKey.slice(-4)}`
-        : '****',
+      keyPreview: '••••••••',  // 암호화된 키 노출 방지
       isActive: k.isActive,
       createdAt: k.createdAt.toISOString().split('T')[0],
     }));

@@ -9,6 +9,7 @@ import { MartingaleStrategy } from './martingale.strategy.js';
 import { StatArbStrategy } from './stat-arb.strategy.js';
 import { ScalpingStrategy } from './scalping.strategy.js';
 import { FundingArbStrategy } from './funding-arb.strategy.js';
+import { marketRegimeService, type MarketRegime } from '../services/regime.service.js';
 
 /**
  * 앙상블 전략: 여러 서브 전략을 병렬 실행하고 가중 투표로 최종 신호 결정
@@ -18,6 +19,28 @@ import { FundingArbStrategy } from './funding-arb.strategy.js';
  * - 정규화된 점수가 임계값을 넘으면 매수/매도 신호 생성
  * - 합의 비율이 높을수록 포지션 사이즈 확대
  */
+// 레짐별 전략 가중치 곱셈 맵
+const REGIME_WEIGHT_MULTIPLIERS: Record<MarketRegime, Record<string, number>> = {
+  TRENDING_UP: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 1.0, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
+  TRENDING_DOWN: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 0.5, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
+  RANGING: { GRID: 1.5, MEAN_REVERSION: 1.5, STAT_ARB: 1.3, MOMENTUM: 0.3, TRAILING: 0.5, DCA: 1.0, SCALPING: 1.0, MARTINGALE: 0.8, FUNDING_ARB: 1.0 },
+  VOLATILE: { SCALPING: 1.4, GRID: 1.0, MARTINGALE: 0.8, DCA: 0.5, MOMENTUM: 0.7, TRAILING: 0.7, MEAN_REVERSION: 0.6, STAT_ARB: 0.8, FUNDING_ARB: 0.5 },
+  QUIET: { DCA: 1.4, STAT_ARB: 1.3, GRID: 1.2, MEAN_REVERSION: 1.0, MOMENTUM: 0.5, TRAILING: 0.5, SCALPING: 0.4, MARTINGALE: 0.6, FUNDING_ARB: 1.2 },
+};
+
+// 전략별 신뢰도 범위 (정규화용)
+const CONFIDENCE_RANGES: Record<string, { min: number; max: number }> = {
+  DCA: { min: 0.5, max: 0.9 },
+  GRID: { min: 0.6, max: 0.7 },
+  MOMENTUM: { min: 0.4, max: 0.85 },
+  MEAN_REVERSION: { min: 0.4, max: 0.85 },
+  TRAILING: { min: 0.4, max: 0.8 },
+  MARTINGALE: { min: 0.5, max: 0.9 },
+  STAT_ARB: { min: 0.3, max: 0.8 },
+  SCALPING: { min: 0.3, max: 0.8 },
+  FUNDING_ARB: { min: 0.0, max: 0.95 },
+};
+
 export class EnsembleStrategy extends BaseStrategy {
   private subStrategies: Map<string, BaseStrategy> = new Map();
 
@@ -71,6 +94,10 @@ export class EnsembleStrategy extends BaseStrategy {
 
     if (strategies.length < 2 || data.length < 20) return null;
 
+    // 레짐 감지 (가중치 조정용)
+    const regimeResult = marketRegimeService.detect(data);
+    const regimeMultipliers = REGIME_WEIGHT_MULTIPLIERS[regimeResult.regime];
+
     // 모든 서브 전략 병렬 분석
     interface SubResult {
       strategy: string;
@@ -83,10 +110,26 @@ export class EnsembleStrategy extends BaseStrategy {
       if (!subStrategy) return { strategy: stratType, signal: null, weight: weights[stratType] ?? 1.0 };
 
       const subSignal = subStrategy.analyze(data, cfg);
+
+      // 신뢰도 정규화
+      if (subSignal && subSignal.action !== 'hold') {
+        const range = CONFIDENCE_RANGES[stratType];
+        if (range) {
+          subSignal.confidence = BaseStrategy.calibrateConfidence(
+            subSignal.confidence, range.min, range.max
+          );
+        }
+      }
+
+      // 레짐 인식 가중치 적용
+      const baseWeight = weights[stratType] ?? 1.0;
+      const regimeMultiplier = regimeMultipliers[stratType] ?? 1.0;
+      const adjustedWeight = baseWeight * regimeMultiplier;
+
       return {
         strategy: stratType,
         signal: subSignal,
-        weight: weights[stratType] ?? 1.0,
+        weight: adjustedWeight,
       };
     });
 
@@ -116,7 +159,11 @@ export class EnsembleStrategy extends BaseStrategy {
       }
     }
 
-    const totalWeight = strategies.reduce((sum, s) => sum + (weights[s] ?? 1.0), 0);
+    const totalWeight = strategies.reduce((sum, s) => {
+      const base = weights[s] ?? 1.0;
+      const rm = regimeMultipliers[s] ?? 1.0;
+      return sum + base * rm;
+    }, 0);
     const normalizedBuy = totalWeight > 0 ? (buyVotes / totalWeight) * strategies.length : buyVotes;
     const normalizedSell = totalWeight > 0 ? (-sellVotes / totalWeight) * strategies.length : -sellVotes;
 
@@ -149,10 +196,14 @@ export class EnsembleStrategy extends BaseStrategy {
       return {
         action: 'buy',
         confidence,
-        reason: `앙상블 매수 (${buyReasons.join(', ')}, 점수 ${normalizedBuy.toFixed(1)}, 합의 ${(buyConsensus * 100).toFixed(0)}%)`,
+        reason: `앙상블 매수 [${regimeResult.regime}] (${buyReasons.join(', ')}, 점수 ${normalizedBuy.toFixed(1)}, 합의 ${(buyConsensus * 100).toFixed(0)}%)`,
         price: currentPrice,
         stopLoss,
         takeProfit,
+        metadata: {
+          regime: regimeResult.regime,
+          regimeConfidence: String(regimeResult.confidence),
+        },
       };
     }
 
@@ -166,8 +217,12 @@ export class EnsembleStrategy extends BaseStrategy {
       return {
         action: 'sell',
         confidence,
-        reason: `앙상블 매도 (${sellReasons.join(', ')}, 점수 ${normalizedSell.toFixed(1)}, 합의 ${(sellConsensus * 100).toFixed(0)}%)`,
+        reason: `앙상블 매도 [${regimeResult.regime}] (${sellReasons.join(', ')}, 점수 ${normalizedSell.toFixed(1)}, 합의 ${(sellConsensus * 100).toFixed(0)}%)`,
         price: currentPrice,
+        metadata: {
+          regime: regimeResult.regime,
+          regimeConfidence: String(regimeResult.confidence),
+        },
       };
     }
 

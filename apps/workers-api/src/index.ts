@@ -31,6 +31,15 @@ const app = new Hono<AppEnv>();
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 function checkRateLimit(ip: string, limit: number, windowMs: number): boolean {
   const now = Date.now();
+
+  // 맵 크기 상한 (DDoS 방어) - 만료 항목 확률적 정리
+  if (rateLimitMap.size > 10000) {
+    for (const [key, entry] of rateLimitMap) {
+      if (now > entry.resetAt) rateLimitMap.delete(key);
+      if (rateLimitMap.size <= 5000) break;
+    }
+  }
+
   const entry = rateLimitMap.get(ip);
   if (!entry || now > entry.resetAt) {
     rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
@@ -43,15 +52,15 @@ function checkRateLimit(ip: string, limit: number, windowMs: number): boolean {
 
 // CORS: 허용 오리진 제한 (env.CORS_ORIGIN 동적 포함)
 app.use('*', async (c, next) => {
+  const isProd = c.env.CORS_ORIGIN && !c.env.CORS_ORIGIN.includes('localhost');
   const allowed = [
     c.env.CORS_ORIGIN,
     'https://cryptosentinel-web-8cw.pages.dev',
     'https://web-orpin-zeta.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:3001',
+    ...(isProd ? [] : ['http://localhost:3000', 'http://localhost:3001']),
   ].filter(Boolean);
   const corsMiddleware = cors({
-    origin: (origin) => allowed.includes(origin) ? origin : allowed[0],
+    origin: (origin) => allowed.includes(origin) ? origin : '',
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'X-Engine-Secret'],
     maxAge: 86400,
@@ -84,7 +93,7 @@ app.use('/api/*', async (c, next) => {
   const path = c.req.path;
 
   // Skip auth for health and auth endpoints
-  if (path === '/api/health' || path.startsWith('/api/auth') || path === '/api/engine/run') {
+  if (path === '/api/health' || path.startsWith('/api/auth')) {
     return next();
   }
 
@@ -119,28 +128,17 @@ app.get('/api/health', async (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString(), runtime: 'cloudflare-workers', dataProvider: 'bybit', bybit: bybitStatus });
 });
 
-// Manual trigger for paper trading engine (보호됨)
+// Manual trigger for paper trading engine (JWT 인증 필수 + ENGINE_SECRET 추가 검증)
 app.post('/api/engine/run', async (c) => {
   const secret = c.req.header('X-Engine-Secret');
-  const authHeader = c.req.header('Authorization');
   const engineSecret = c.env.ENGINE_SECRET;
 
-  let authorized = false;
-
-  // 1) ENGINE_SECRET 헤더 확인
-  if (engineSecret && secret === engineSecret) {
-    authorized = true;
+  // ENGINE_SECRET이 설정된 경우 반드시 일치해야 함
+  if (engineSecret && secret !== engineSecret) {
+    return c.json({ error: 'Invalid engine secret' }, 403);
   }
 
-  // 2) JWT 토큰 확인
-  if (!authorized && authHeader?.startsWith('Bearer ')) {
-    const payload = await verifyJWT(authHeader.slice(7), c.env.JWT_SECRET);
-    if (payload?.userId) authorized = true;
-  }
-
-  if (!authorized) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
+  // JWT 인증은 미들웨어에서 이미 처리됨 (userId가 set됨)
 
   try {
     const logs = await runPaperTrading(c.env);
