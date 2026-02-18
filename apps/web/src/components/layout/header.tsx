@@ -1,10 +1,20 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { Bell, User, LogOut, Settings, ChevronDown } from "lucide-react";
+import { Bell, User, LogOut, Settings, ChevronDown, Check } from "lucide-react";
 import { useAuthStore } from "@/stores/auth.store";
+import api, { endpoints } from "@/lib/api";
+
+interface AlertItem {
+  id: string;
+  type: "PRICE" | "TRADE" | "RISK" | "ANOMALY" | "SYSTEM";
+  message: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  isRead: boolean;
+  createdAt: string;
+}
 
 const pageNames: Record<string, string> = {
   "/": "대시보드",
@@ -17,15 +27,75 @@ const pageNames: Record<string, string> = {
   "/settings": "설정",
 };
 
+function formatRelativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffSec = Math.floor((now - then) / 1000);
+
+  if (diffSec < 60) return "방금 전";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}분 전`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}시간 전`;
+  if (diffSec < 604800) return `${Math.floor(diffSec / 86400)}일 전`;
+  return new Date(dateStr).toLocaleDateString("ko-KR");
+}
+
+function getAlertIcon(type: AlertItem["type"]): string {
+  switch (type) {
+    case "TRADE": return "💹";
+    case "RISK": return "⚠️";
+    case "PRICE": return "📊";
+    case "ANOMALY": return "🔍";
+    case "SYSTEM": return "⚙️";
+    default: return "🔔";
+  }
+}
+
+function getSeverityColor(severity: AlertItem["severity"]): string {
+  switch (severity) {
+    case "CRITICAL": return "text-red-400";
+    case "HIGH": return "text-orange-400";
+    case "MEDIUM": return "text-yellow-400";
+    case "LOW": return "text-slate-400";
+    default: return "text-slate-400";
+  }
+}
+
 export function Header() {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
   const pageTitle = pageNames[pathname] || "CryptoSentinel";
+
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const res = await api.get(endpoints.settings.alerts, { params: { limit: 30 } });
+      setAlerts(res.data.data ?? []);
+      setUnreadCount(res.data.unreadCount ?? 0);
+    } catch {
+      // 알림 조회 실패 시 무시 (인증 만료 등)
+    }
+  }, []);
+
+  // 알림 주기적 조회 (30초마다)
+  useEffect(() => {
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 30000);
+    return () => clearInterval(interval);
+  }, [fetchAlerts]);
+
+  // 알림 패널 열 때 새로 조회
+  useEffect(() => {
+    if (showNotifications) {
+      fetchAlerts();
+    }
+  }, [showNotifications, fetchAlerts]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -39,6 +109,20 @@ export function Header() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  const markAllRead = async () => {
+    if (unreadCount === 0) return;
+    setLoading(true);
+    try {
+      await api.post(endpoints.settings.alertsRead);
+      setAlerts((prev) => prev.map((a) => ({ ...a, isRead: true })));
+      setUnreadCount(0);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <header role="banner" className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-800 bg-slate-950/80 px-6 backdrop-blur-md">
@@ -56,27 +140,70 @@ export function Header() {
             className="relative rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
           >
             <Bell className="h-5 w-5" />
-            <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-emerald-500" />
+            {unreadCount > 0 && (
+              <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white">
+                {unreadCount > 9 ? "9+" : unreadCount}
+              </span>
+            )}
           </button>
 
           {showNotifications && (
-            <div className="absolute right-0 top-12 w-80 rounded-xl border border-slate-800 bg-slate-900 shadow-2xl animate-slide-down">
-              <div className="border-b border-slate-800 px-4 py-3">
-                <h3 className="text-sm font-semibold text-white">알림</h3>
+            <div className="absolute right-0 top-12 w-96 rounded-xl border border-slate-800 bg-slate-900 shadow-2xl animate-slide-down">
+              <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+                <h3 className="text-sm font-semibold text-white">
+                  알림 {unreadCount > 0 && <span className="ml-1 text-emerald-400">({unreadCount})</span>}
+                </h3>
+                {unreadCount > 0 && (
+                  <button
+                    onClick={markAllRead}
+                    disabled={loading}
+                    className="flex items-center gap-1 text-xs text-slate-500 hover:text-emerald-400 transition-colors disabled:opacity-50"
+                  >
+                    <Check className="h-3 w-3" />
+                    모두 읽음
+                  </button>
+                )}
               </div>
               <div className="max-h-80 overflow-y-auto">
-                <div className="px-4 py-3 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
-                  <p className="text-sm text-white">봇 &quot;BTC 모멘텀&quot; 매수 체결</p>
-                  <p className="text-xs text-slate-500 mt-1">2분 전</p>
-                </div>
-                <div className="px-4 py-3 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors">
-                  <p className="text-sm text-white">시장 국면 변경: 상승장 고변동성</p>
-                  <p className="text-xs text-slate-500 mt-1">15분 전</p>
-                </div>
-                <div className="px-4 py-3 hover:bg-slate-800/50 transition-colors">
-                  <p className="text-sm text-white">일일 손익 리포트: +$342.50</p>
-                  <p className="text-xs text-slate-500 mt-1">1시간 전</p>
-                </div>
+                {alerts.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-sm text-slate-500">
+                    알림이 없습니다
+                  </div>
+                ) : (
+                  alerts.map((alert) => (
+                    <div
+                      key={alert.id}
+                      className={`px-4 py-3 border-b border-slate-800/50 hover:bg-slate-800/50 transition-colors ${
+                        !alert.isRead ? "bg-slate-800/20" : ""
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="text-sm mt-0.5">{getAlertIcon(alert.type)}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm ${!alert.isRead ? "text-white font-medium" : "text-slate-300"}`}>
+                            {alert.message.split("\n")[0]}
+                          </p>
+                          {alert.message.split("\n").length > 1 && (
+                            <p className="text-xs text-slate-500 mt-0.5 truncate">
+                              {alert.message.split("\n").slice(1).join(" | ")}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`text-[10px] ${getSeverityColor(alert.severity)}`}>
+                              {alert.severity}
+                            </span>
+                            <span className="text-xs text-slate-600">
+                              {formatRelativeTime(alert.createdAt)}
+                            </span>
+                          </div>
+                        </div>
+                        {!alert.isRead && (
+                          <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0" />
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}

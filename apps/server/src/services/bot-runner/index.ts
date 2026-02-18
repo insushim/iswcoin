@@ -456,7 +456,7 @@ export class BotRunnerService {
           });
 
           if (mode === 'PAPER') {
-            await this.paperTrading.executePaperTrade(botId, symbol, exchangeName, signal, currentPrice, currentPosition, atr, ohlcvData);
+            await this.paperTrading.executePaperTrade(botId, symbol, exchangeName, signal, currentPrice, currentPosition, atr, ohlcvData, userId);
           } else if (exchange) {
             await this.realTrading.executeRealTrade(botId, symbol, exchange, signal, currentPrice, currentPosition, atr, userId);
           }

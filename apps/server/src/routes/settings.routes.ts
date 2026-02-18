@@ -5,6 +5,7 @@ import { prisma } from '../db.js';
 import { authMiddleware, type AuthenticatedRequest } from '../middleware/auth.js';
 import { encrypt } from '../utils/encryption.js';
 import { logger } from '../utils/logger.js';
+import { notificationService } from '../services/notification.service.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -304,6 +305,70 @@ router.put('/notifications', async (req: AuthenticatedRequest, res: Response): P
   } catch (err) {
     logger.error('Failed to update notifications', { error: String(err) });
     res.status(500).json({ error: 'Failed to update notification settings' });
+  }
+});
+
+// ─── Alerts ─────────────────────────────────────────────
+
+// GET /alerts - 읽지 않은 알림 목록 조회
+router.get('/alerts', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const limit = Math.min(Number(req.query['limit']) || 50, 100);
+
+    const alerts = await notificationService.getUnreadAlerts(userId, limit);
+
+    // 읽은 알림도 포함하여 최근 알림 조회 (전체 목록)
+    const allAlerts = await prisma.alert.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        type: true,
+        message: true,
+        severity: true,
+        isRead: true,
+        createdAt: true,
+      },
+    });
+
+    const unreadCount = alerts.length;
+
+    res.json({
+      data: allAlerts,
+      unreadCount,
+    });
+  } catch (err) {
+    logger.error('Failed to fetch alerts', { error: String(err) });
+    res.status(500).json({ error: 'Failed to fetch alerts' });
+  }
+});
+
+// POST /alerts/read - 알림 읽음 처리
+router.post('/alerts/read', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const { alertIds } = req.body as { alertIds?: string[] };
+
+    if (alertIds && Array.isArray(alertIds) && alertIds.length > 0) {
+      // 특정 알림만 읽음 처리 (소유권 확인)
+      await prisma.alert.updateMany({
+        where: { id: { in: alertIds }, userId },
+        data: { isRead: true },
+      });
+    } else {
+      // 전체 읽음 처리
+      await prisma.alert.updateMany({
+        where: { userId, isRead: false },
+        data: { isRead: true },
+      });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Failed to mark alerts as read', { error: String(err) });
+    res.status(500).json({ error: 'Failed to mark alerts as read' });
   }
 });
 

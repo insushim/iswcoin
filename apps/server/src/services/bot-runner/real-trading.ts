@@ -4,6 +4,7 @@ import { logger } from '../../utils/logger.js';
 import { exchangeService, type SupportedExchange } from '../exchange.service.js';
 import { riskManager } from '../risk.service.js';
 import { executionService } from '../execution.service.js';
+import { notificationService } from '../notification.service.js';
 import { env } from '../../config/env.js';
 import type { TrackedPosition, TradeSignalInput } from './types.js';
 import { MIN_ORDER_VALUE_USDT } from './types.js';
@@ -225,6 +226,11 @@ export class RealTradingService {
 
       // 서킷 브레이커 메모리 추적 업데이트
       if (realizedPnl !== null) riskManager.recordTradeResult(botId, realizedPnl);
+
+      // 알림 생성
+      notificationService.sendTradeNotification(
+        userId, symbol, signal.action, fillPrice, filledAmount, realizedPnl ?? undefined
+      ).catch((err) => logger.debug('Trade notification failed', { error: String(err) }));
 
       logger.info('Real trade executed (confirmed)', {
         botId, symbol,

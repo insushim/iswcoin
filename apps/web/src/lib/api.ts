@@ -125,5 +125,7 @@ export const endpoints = {
     notifications: "/settings/notifications",
     getNotifications: () => api.get("/settings/notifications"),
     profile: "/settings/profile",
+    alerts: "/settings/alerts",
+    alertsRead: "/settings/alerts/read",
   },
 } as const;

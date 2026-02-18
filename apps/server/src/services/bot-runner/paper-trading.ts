@@ -4,6 +4,7 @@ import { logger } from '../../utils/logger.js';
 import { exchangeService, EXCHANGE_FEE_RATES, type SupportedExchange } from '../exchange.service.js';
 import { riskManager } from '../risk.service.js';
 import { slippageService } from '../slippage.service.js';
+import { notificationService } from '../notification.service.js';
 import { env } from '../../config/env.js';
 import type { BotRunnerState, TrackedPosition, PaperTradeLog, TradeSignalInput } from './types.js';
 import { MAX_PAPER_LOGS, MIN_ORDER_VALUE_USDT } from './types.js';
@@ -284,7 +285,8 @@ export class PaperTradingService {
     currentPrice: number,
     currentPosition: TrackedPosition | null,
     atr: number,
-    ohlcvData?: { high: number; low: number; close: number; volume: number }[]
+    ohlcvData?: { high: number; low: number; close: number; volume: number }[],
+    userId?: string
   ): Promise<void> {
     const paper = exchangeService.getPaperExchange(exchangeName);
     if (!paper) return;
@@ -370,6 +372,13 @@ export class PaperTradingService {
 
       // 서킷 브레이커 메모리 추적 업데이트
       if (realizedPnl !== null) riskManager.recordTradeResult(botId, realizedPnl);
+
+      // 알림 생성 (userId가 있을 때만)
+      if (userId) {
+        notificationService.sendTradeNotification(
+          userId, symbol, signal.action, order.price, order.amount, realizedPnl ?? undefined
+        ).catch((err) => logger.debug('Trade notification failed', { error: String(err) }));
+      }
 
       const updatedBalance = paper.getBalance();
       const paperUsdtBalance = updatedBalance['USDT']?.total ?? 0;
