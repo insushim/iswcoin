@@ -11,6 +11,7 @@ import { ScalpingStrategy } from './scalping.strategy.js';
 import { FundingArbStrategy } from './funding-arb.strategy.js';
 import { DetailedMarketRegime } from '@cryptosentinel/shared';
 import { marketRegimeService, type MarketRegime } from '../services/regime.service.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * 앙상블 전략: 여러 서브 전략을 병렬 실행하고 가중 투표로 최종 신호 결정
@@ -20,13 +21,13 @@ import { marketRegimeService, type MarketRegime } from '../services/regime.servi
  * - 정규화된 점수가 임계값을 넘으면 매수/매도 신호 생성
  * - 합의 비율이 높을수록 포지션 사이즈 확대
  */
-// 레짐별 전략 가중치 곱셈 맵
+// 레짐별 전략 가중치 곱셈 맵 (최소 0.5로 완화 - 극단적 차단 방지)
 const REGIME_WEIGHT_MULTIPLIERS: Record<MarketRegime, Record<string, number>> = {
-  [DetailedMarketRegime.TRENDING_UP]: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 1.0, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
-  [DetailedMarketRegime.TRENDING_DOWN]: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 0.5, MEAN_REVERSION: 0.3, GRID: 0.5, SCALPING: 0.7, STAT_ARB: 0.5, MARTINGALE: 0.4, FUNDING_ARB: 1.0 },
-  [DetailedMarketRegime.RANGING]: { GRID: 1.5, MEAN_REVERSION: 1.5, STAT_ARB: 1.3, MOMENTUM: 0.3, TRAILING: 0.5, DCA: 1.0, SCALPING: 1.0, MARTINGALE: 0.8, FUNDING_ARB: 1.0 },
-  [DetailedMarketRegime.VOLATILE]: { SCALPING: 1.4, GRID: 1.0, MARTINGALE: 0.8, DCA: 0.5, MOMENTUM: 0.7, TRAILING: 0.7, MEAN_REVERSION: 0.6, STAT_ARB: 0.8, FUNDING_ARB: 0.5 },
-  [DetailedMarketRegime.QUIET]: { DCA: 1.4, STAT_ARB: 1.3, GRID: 1.2, MEAN_REVERSION: 1.0, MOMENTUM: 0.5, TRAILING: 0.5, SCALPING: 0.4, MARTINGALE: 0.6, FUNDING_ARB: 1.2 },
+  [DetailedMarketRegime.TRENDING_UP]: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 1.0, MEAN_REVERSION: 0.5, GRID: 0.6, SCALPING: 0.7, STAT_ARB: 0.6, MARTINGALE: 0.5, FUNDING_ARB: 1.0 },
+  [DetailedMarketRegime.TRENDING_DOWN]: { MOMENTUM: 1.5, TRAILING: 1.3, DCA: 0.7, MEAN_REVERSION: 0.5, GRID: 0.6, SCALPING: 0.7, STAT_ARB: 0.6, MARTINGALE: 0.5, FUNDING_ARB: 1.0 },
+  [DetailedMarketRegime.RANGING]: { GRID: 1.5, MEAN_REVERSION: 1.5, STAT_ARB: 1.3, MOMENTUM: 0.5, TRAILING: 0.6, DCA: 1.0, SCALPING: 1.0, MARTINGALE: 0.8, FUNDING_ARB: 1.0 },
+  [DetailedMarketRegime.VOLATILE]: { SCALPING: 1.4, GRID: 1.0, MARTINGALE: 0.8, DCA: 0.7, MOMENTUM: 0.7, TRAILING: 0.7, MEAN_REVERSION: 0.6, STAT_ARB: 0.8, FUNDING_ARB: 0.5 },
+  [DetailedMarketRegime.QUIET]: { DCA: 1.4, STAT_ARB: 1.3, GRID: 1.2, MEAN_REVERSION: 1.0, MOMENTUM: 0.6, TRAILING: 0.6, SCALPING: 0.5, MARTINGALE: 0.6, FUNDING_ARB: 1.2 },
 };
 
 // 전략별 신뢰도 범위 (정규화용)
@@ -51,8 +52,8 @@ export class EnsembleStrategy extends BaseStrategy {
 
   getDefaultConfig(): Record<string, number> {
     return {
-      buyThreshold: 1.2,
-      sellThreshold: -1.2,
+      buyThreshold: 0.7,
+      sellThreshold: -0.7,
     };
   }
 
@@ -171,6 +172,27 @@ export class EnsembleStrategy extends BaseStrategy {
     const currentPrice = data[data.length - 1]!.close;
     const buyConsensus = strategies.length > 0 ? buyCount / strategies.length : 0;
     const sellConsensus = strategies.length > 0 ? sellCount / strategies.length : 0;
+
+    // 진단 로깅: 투표 현황
+    logger.debug('Ensemble vote summary', {
+      regime: regimeResult.regime,
+      strategies: strategies.join(','),
+      buyVotes: buyVotes.toFixed(2),
+      sellVotes: sellVotes.toFixed(2),
+      totalWeight: totalWeight.toFixed(2),
+      normalizedBuy: normalizedBuy.toFixed(2),
+      normalizedSell: normalizedSell.toFixed(2),
+      buyThreshold,
+      sellThreshold,
+      buyReasons: buyReasons.join('; '),
+      sellReasons: sellReasons.join('; '),
+      subResults: results.map(r => ({
+        s: r.strategy,
+        action: r.signal?.action ?? 'none',
+        w: r.weight.toFixed(2),
+        conf: r.signal?.confidence?.toFixed(2) ?? '-',
+      })),
+    });
 
     // 매수 신호
     if (normalizedBuy >= buyThreshold) {

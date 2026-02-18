@@ -283,7 +283,9 @@ export class FundingArbStrategy extends BaseStrategy {
   }
 
   private checkFundingConsistency(): number {
-    if (this.fundingRateHistory.length < 3) return 0;
+    // 히스토리가 부족하면 현재 펀딩비를 신뢰 (첫 진입 허용)
+    if (this.fundingRateHistory.length < 2) return 0.7;
+    if (this.fundingRateHistory.length < 3) return 0.65;
 
     const recent = this.fundingRateHistory.slice(-6);
     const positiveCount = recent.filter((r) => r.rate > 0).length;

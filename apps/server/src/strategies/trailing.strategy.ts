@@ -15,7 +15,7 @@ export class TrailingStrategy extends BaseStrategy {
     return {
       atrPeriod: 14,
       atrMultiplier: 2.5,
-      entryRSIThreshold: 45,
+      entryRSIThreshold: 40,
       rsiPeriod: 14,
       emaPeriod: 20,
       minTrailPct: 1,
@@ -94,7 +94,9 @@ export class TrailingStrategy extends BaseStrategy {
     const rsiRecovering = currentRSI > prevRSI && currentRSI > entryRSIThreshold;
     const priceAbovePrevHigh = currentCandle.close > data[data.length - 2]!.high;
 
-    if (aboveEMA && rsiRecovering && priceAbovePrevHigh) {
+    // 3개 조건 중 2개 이상 충족 시 진입 (기존: 3개 모두 필요)
+    const entryConditions = [aboveEMA, rsiRecovering, priceAbovePrevHigh].filter(Boolean).length;
+    if (entryConditions >= 2) {
       this.inPosition = true;
       this.entryPrice = currentPrice;
       this.highestSinceEntry = currentCandle.high;

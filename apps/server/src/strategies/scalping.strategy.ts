@@ -220,7 +220,15 @@ export class ScalpingStrategy extends BaseStrategy {
 
     // ADX 보너스
     if (trendStrong) {
+      buyScore += 10;
+      sellScore += 10;
+    }
+
+    // EMA 방향 모멘텀 보조 (약한 추세)
+    if (currentEmaFast > prevEmaFast) {
       buyScore += 5;
+    }
+    if (currentEmaFast < prevEmaFast) {
       sellScore += 5;
     }
 
@@ -232,7 +240,7 @@ export class ScalpingStrategy extends BaseStrategy {
       ? currentPrice + currentATR * atrTpMultiplier
       : currentPrice * (1 + takeProfitPct / 100);
 
-    if (buyScore >= 55) {
+    if (buyScore >= 40) {
       return {
         action: 'buy',
         confidence: Math.min(buyScore / 100, 0.95),
@@ -252,7 +260,7 @@ export class ScalpingStrategy extends BaseStrategy {
       };
     }
 
-    if (sellScore >= 55) {
+    if (sellScore >= 40) {
       return {
         action: 'sell',
         confidence: Math.min(sellScore / 100, 0.95),

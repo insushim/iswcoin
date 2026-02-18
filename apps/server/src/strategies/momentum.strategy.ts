@@ -10,7 +10,7 @@ export class MomentumStrategy extends BaseStrategy {
   getDefaultConfig(): Record<string, number> {
     return {
       rsiPeriod: 14,
-      rsiBuyThreshold: 40,
+      rsiBuyThreshold: 45,
       rsiSellThreshold: 70,
       macdFast: 12,
       macdSlow: 26,
@@ -147,7 +147,25 @@ export class MomentumStrategy extends BaseStrategy {
       sellReasons.push('Volume confirmed');
     }
 
-    if (buyScore >= 60) {
+    // MACD 히스토그램 증가 추세 (약한 매수 신호 보조)
+    if (macdHistogram > 0 && macdValues.length >= 3) {
+      const prevHistogram = macdValues[macdValues.length - 2]?.histogram ?? 0;
+      if (macdHistogram > prevHistogram) {
+        buyScore += 10;
+        buyReasons.push('MACD histogram rising');
+      }
+    }
+
+    // MACD 히스토그램 감소 추세 (약한 매도 신호 보조)
+    if (macdHistogram < 0 && macdValues.length >= 3) {
+      const prevHistogram = macdValues[macdValues.length - 2]?.histogram ?? 0;
+      if (macdHistogram < prevHistogram) {
+        sellScore += 10;
+        sellReasons.push('MACD histogram falling');
+      }
+    }
+
+    if (buyScore >= 35) {
       return {
         action: 'buy',
         confidence: Math.min(buyScore / 100, 0.95),
@@ -164,7 +182,7 @@ export class MomentumStrategy extends BaseStrategy {
       };
     }
 
-    if (sellScore >= 60) {
+    if (sellScore >= 35) {
       return {
         action: 'sell',
         confidence: Math.min(sellScore / 100, 0.95),

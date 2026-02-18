@@ -211,18 +211,18 @@ export class BotRunnerService {
           // Paper 모드: 공개 API로 실시세 데이터 가져오기
           try {
             const publicExchange = exchangeService.getPublicExchange(exchangeName);
-            const data = await exchangeService.getOHLCV(publicExchange, symbol, '1h', 100);
+            const data = await exchangeService.getOHLCV(publicExchange, symbol, '1h', 200);
             ohlcvRaw = data.map((c) => [c[0] ?? 0, c[1] ?? 0, c[2] ?? 0, c[3] ?? 0, c[4] ?? 0, c[5] ?? 0]);
           } catch (err) {
             logger.warn('Paper mode: failed to fetch OHLCV via public exchange', { error: String(err) });
             // Fallback: 인증된 exchange가 있으면 사용
             if (exchange) {
-              const data = await exchangeService.getOHLCV(exchange, symbol, '1h', 100);
+              const data = await exchangeService.getOHLCV(exchange, symbol, '1h', 200);
               ohlcvRaw = data.map((c) => [c[0] ?? 0, c[1] ?? 0, c[2] ?? 0, c[3] ?? 0, c[4] ?? 0, c[5] ?? 0]);
             }
           }
         } else if (exchange) {
-          const data = await exchangeService.getOHLCV(exchange, symbol, '1h', 100);
+          const data = await exchangeService.getOHLCV(exchange, symbol, '1h', 200);
           ohlcvRaw = data.map((c) => [c[0] ?? 0, c[1] ?? 0, c[2] ?? 0, c[3] ?? 0, c[4] ?? 0, c[5] ?? 0]);
         }
 

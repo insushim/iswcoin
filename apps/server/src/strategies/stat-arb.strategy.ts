@@ -107,13 +107,16 @@ export class StatArbStrategy extends BaseStrategy {
     const buyReasons: string[] = [];
     const sellReasons: string[] = [];
 
-    // Z-Score 기반 시그널
+    // Z-Score 기반 시그널 (강한 신호: 엔트리 교차, 중간: 엔트리 존 내, 약한: 1.0+ 영역)
     if (zScore < -zScoreEntry && prevZScore >= -zScoreEntry) {
       buyScore += 35;
       buyReasons.push(`Z-Score cross below -${zScoreEntry.toFixed(1)} (${zScore.toFixed(2)})`);
     } else if (zScore < -zScoreEntry) {
       buyScore += 20;
       buyReasons.push(`Z-Score in buy zone (${zScore.toFixed(2)})`);
+    } else if (zScore < -1.0) {
+      buyScore += 12;
+      buyReasons.push(`Z-Score moderately low (${zScore.toFixed(2)})`);
     }
 
     if (zScore > zScoreEntry && prevZScore <= zScoreEntry) {
@@ -122,6 +125,9 @@ export class StatArbStrategy extends BaseStrategy {
     } else if (zScore > zScoreEntry) {
       sellScore += 20;
       sellReasons.push(`Z-Score in sell zone (${zScore.toFixed(2)})`);
+    } else if (zScore > 1.0) {
+      sellScore += 12;
+      sellReasons.push(`Z-Score moderately high (${zScore.toFixed(2)})`);
     }
 
     // Mean reversion 확인
@@ -171,7 +177,7 @@ export class StatArbStrategy extends BaseStrategy {
     const dynamicSL = currentATR > 0 ? (currentATR * 2) / currentPrice * 100 : stopLossPct;
     const dynamicTP = currentATR > 0 ? (currentATR * 3) / currentPrice * 100 : takeProfitPct;
 
-    if (buyScore >= 55) {
+    if (buyScore >= 40) {
       return {
         action: 'buy',
         confidence: Math.min(buyScore / 100, 0.95),
@@ -189,7 +195,7 @@ export class StatArbStrategy extends BaseStrategy {
       };
     }
 
-    if (sellScore >= 55) {
+    if (sellScore >= 40) {
       return {
         action: 'sell',
         confidence: Math.min(sellScore / 100, 0.95),

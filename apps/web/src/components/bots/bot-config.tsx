@@ -52,25 +52,25 @@ const ENSEMBLE_PRESETS: Record<string, { label: string; strategies: string[]; we
     label: "안정형 (횡보장 최적)",
     strategies: ["DCA", "MEAN_REVERSION", "GRID", "TRAILING"],
     weights: { DCA: 1.0, MEAN_REVERSION: 1.5, GRID: 1.2, TRAILING: 1.3 },
-    buyThreshold: 1.2, sellThreshold: -1.2,
+    buyThreshold: 0.6, sellThreshold: -0.6,
   },
   aggressive: {
     label: "공격형 (추세장 최적)",
-    strategies: ["MOMENTUM", "SCALPING", "TRAILING"],
-    weights: { MOMENTUM: 2.0, SCALPING: 1.2, TRAILING: 1.5 },
-    buyThreshold: 1.0, sellThreshold: -1.0,
+    strategies: ["DCA", "MOMENTUM", "SCALPING", "TRAILING"],
+    weights: { DCA: 0.6, MOMENTUM: 2.0, SCALPING: 1.2, TRAILING: 1.5 },
+    buyThreshold: 0.5, sellThreshold: -0.5,
   },
   balanced: {
     label: "균형형 (전천후)",
-    strategies: ["MOMENTUM", "MEAN_REVERSION", "STAT_ARB", "TRAILING"],
-    weights: { MOMENTUM: 1.5, MEAN_REVERSION: 1.3, STAT_ARB: 1.5, TRAILING: 1.2 },
-    buyThreshold: 1.2, sellThreshold: -1.2,
+    strategies: ["DCA", "MOMENTUM", "MEAN_REVERSION", "STAT_ARB", "TRAILING"],
+    weights: { DCA: 0.7, MOMENTUM: 1.5, MEAN_REVERSION: 1.3, STAT_ARB: 1.5, TRAILING: 1.2 },
+    buyThreshold: 0.6, sellThreshold: -0.6,
   },
   ai: {
     label: "AI형 (데이터 기반)",
-    strategies: ["RL_AGENT", "STAT_ARB", "MEAN_REVERSION", "FUNDING_ARB"],
-    weights: { RL_AGENT: 1.8, STAT_ARB: 1.5, MEAN_REVERSION: 1.2, FUNDING_ARB: 0.8 },
-    buyThreshold: 1.0, sellThreshold: -1.0,
+    strategies: ["DCA", "RL_AGENT", "STAT_ARB", "MEAN_REVERSION", "FUNDING_ARB"],
+    weights: { DCA: 0.6, RL_AGENT: 1.8, STAT_ARB: 1.5, MEAN_REVERSION: 1.2, FUNDING_ARB: 0.8 },
+    buyThreshold: 0.5, sellThreshold: -0.5,
   },
 };
 
@@ -144,8 +144,8 @@ const STRATEGY_CONFIGS: Record<StrategyType, ConfigField[]> = {
     { key: "minFundingCycles", label: "최소 펀딩 횟수", type: "number", defaultValue: 3, helperText: "최소 수취 주기 (8h × N)" },
   ],
   [StrategyType.ENSEMBLE]: [
-    { key: "buyThreshold", label: "매수 임계값", type: "number", defaultValue: 1.2, helperText: "가중 투표 합산이 이 값 이상이면 매수 (낮을수록 공격적)" },
-    { key: "sellThreshold", label: "매도 임계값", type: "number", defaultValue: -1.2, helperText: "가중 투표 합산이 이 값 이하이면 매도 (0에 가까울수록 공격적)" },
+    { key: "buyThreshold", label: "매수 임계값", type: "number", defaultValue: 0.7, helperText: "가중 투표 합산이 이 값 이상이면 매수 (낮을수록 공격적, 권장: 0.5~1.0)" },
+    { key: "sellThreshold", label: "매도 임계값", type: "number", defaultValue: -0.7, helperText: "가중 투표 합산이 이 값 이하이면 매도 (0에 가까울수록 공격적, 권장: -0.5~-1.0)" },
   ],
 };
 

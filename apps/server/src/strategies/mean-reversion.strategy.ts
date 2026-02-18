@@ -12,8 +12,8 @@ export class MeanReversionStrategy extends BaseStrategy {
       bbPeriod: 20,
       bbStdDev: 2,
       rsiPeriod: 14,
-      rsiOversold: 30,
-      rsiOverbought: 70,
+      rsiOversold: 35,
+      rsiOverbought: 65,
       smaPeriod: 50,
       stopLossPct: 2.5,
       takeProfitPct: 4,
@@ -59,8 +59,8 @@ export class MeanReversionStrategy extends BaseStrategy {
       ? (currentPrice - currentBB.lower) / (currentBB.upper - currentBB.lower)
       : 0.5;
 
-    const touchedLowerBand = currentPrice <= currentBB.lower * 1.005;
-    const touchedUpperBand = currentPrice >= currentBB.upper * 0.995;
+    const touchedLowerBand = currentPrice <= currentBB.lower * 1.015;
+    const touchedUpperBand = currentPrice >= currentBB.upper * 0.985;
 
     let lowerBandBounce = false;
     if (touchedLowerBand) {
@@ -96,7 +96,10 @@ export class MeanReversionStrategy extends BaseStrategy {
     const nearSMA = Math.abs(currentPrice - currentSMA) / currentSMA < 0.02;
     const belowSMA = currentPrice < currentSMA;
 
-    if ((touchedLowerBand || lowerBandBounce) && rsiReversingUp) {
+    // RSI가 중립이지만 BB 하단 터치하고 RSI가 하락 후 반등 시작한 경우도 허용
+    const rsiModerateUp = currentRSI < 45 && currentRSI > prevRSI;
+
+    if ((touchedLowerBand || lowerBandBounce) && (rsiReversingUp || rsiModerateUp)) {
       const confidence = this.calculateConfidence(pctB, currentRSI, 'buy', nearSMA);
       const targetPrice = currentBB.middle;
       const effectiveTP = Math.max(
@@ -121,7 +124,9 @@ export class MeanReversionStrategy extends BaseStrategy {
       };
     }
 
-    if ((touchedUpperBand || upperBandBounce) && rsiReversingDown) {
+    const rsiModerateDown = currentRSI > 55 && currentRSI < prevRSI;
+
+    if ((touchedUpperBand || upperBandBounce) && (rsiReversingDown || rsiModerateDown)) {
       const confidence = this.calculateConfidence(1 - pctB, 100 - currentRSI, 'sell', nearSMA);
 
       return {

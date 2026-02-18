@@ -19,7 +19,7 @@ export class MartingaleStrategy extends BaseStrategy {
       dropThresholdPct: 3,
       takeProfitPct: 2,
       rsiPeriod: 14,
-      rsiEntryThreshold: 35,
+      rsiEntryThreshold: 45,
       emaPeriod: 50,
       maxDrawdownPct: 15,
       cooldownCandles: 5,

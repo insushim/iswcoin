@@ -175,7 +175,7 @@ export default function PaperTradingPage() {
       setLoading(false);
     };
     init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line
 
   // 선택된 봇 변경 시 데이터 로드
   useEffect(() => {
