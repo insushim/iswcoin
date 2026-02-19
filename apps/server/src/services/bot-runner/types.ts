@@ -2,7 +2,7 @@
 
 export interface TrackedPosition {
   isOpen: boolean;
-  side: 'long' | 'short';
+  side: "long" | "short";
   entryPrice: number;
   amount: number;
   totalCost: number;
@@ -25,12 +25,12 @@ export interface PaperTradeLog {
   execution: {
     fillPrice: number;
     amount: number;
-    side: 'buy' | 'sell';
+    side: "buy" | "sell";
     fee: number;
   } | null;
   position: {
     isOpen: boolean;
-    side: 'long' | 'short' | null;
+    side: "long" | "short" | null;
     entryPrice: number;
     amount: number;
     unrealizedPnl: number;
@@ -71,7 +71,7 @@ export interface TradeSignalInput {
 
 // 매직 넘버 상수화
 export const MAX_PAPER_LOGS = 1000;
-export const MIN_CONFIDENCE_THRESHOLD = 0.3;
+export const MIN_CONFIDENCE_THRESHOLD = 0.15;
 export const MIN_ORDER_VALUE_USDT = 10;
-export const PAPER_SAVE_INTERVAL = 10;  // 매 N회 루프마다 Paper 상태 저장
-export const RECONCILE_INTERVAL = 10;   // 매 N회 루프마다 포지션 대사 (REAL만)
+export const PAPER_SAVE_INTERVAL = 10; // 매 N회 루프마다 Paper 상태 저장
+export const RECONCILE_INTERVAL = 10; // 매 N회 루프마다 포지션 대사 (REAL만)
