@@ -1,19 +1,36 @@
-import { Hono } from 'hono';
-import type { Env, AppVariables } from '../index';
-import { generateId } from '../utils';
+import { Hono } from "hono";
+import type { Env, AppVariables } from "../index";
+import { generateId } from "../utils";
 
 type BacktestEnv = { Bindings: Env; Variables: AppVariables };
 export const backtestRoutes = new Hono<BacktestEnv>();
 
-const BYBIT_BASE = 'https://api.bybit.com';
+const BYBIT_BASE = "https://api.bybit.com";
 
 // ============ Types ============
 
-interface DailyPrice { date: string; timestamp: number; price: number; high: number; low: number; }
-interface BacktestTrade { date: string; side: 'BUY' | 'SELL'; price: number; quantity: number; pnl: number; reason: string; }
+interface DailyPrice {
+  date: string;
+  timestamp: number;
+  price: number;
+  high: number;
+  low: number;
+}
+interface BacktestTrade {
+  date: string;
+  side: "BUY" | "SELL";
+  price: number;
+  quantity: number;
+  pnl: number;
+  reason: string;
+}
 interface BacktestResult {
-  totalReturn: number; sharpeRatio: number; maxDrawdown: number; winRate: number;
-  totalTrades: number; profitFactor: number;
+  totalReturn: number;
+  sharpeRatio: number;
+  maxDrawdown: number;
+  winRate: number;
+  totalTrades: number;
+  profitFactor: number;
   equityCurve: { date: string; value: number }[];
   trades: BacktestTrade[];
   dataSource: string;
@@ -22,21 +39,31 @@ interface BacktestResult {
 
 // ============ Fetch Historical Data ============
 
-async function fetchHistoricalPrices(symbol: string, startDate: string, endDate: string): Promise<DailyPrice[]> {
-  const bybitSymbol = symbol.replace('/', '');
+async function fetchHistoricalPrices(
+  symbol: string,
+  startDate: string,
+  endDate: string,
+): Promise<DailyPrice[]> {
+  const bybitSymbol = symbol.replace("/", "");
   const startMs = new Date(startDate).getTime();
   const endMs = new Date(endDate).getTime();
   const limit = Math.min(Math.ceil((endMs - startMs) / 86400000) + 1, 1000);
 
   const res = await fetch(
-    `${BYBIT_BASE}/v5/market/kline?category=spot&symbol=${bybitSymbol}&interval=D&start=${startMs}&end=${endMs}&limit=${limit}`
+    `${BYBIT_BASE}/v5/market/kline?category=spot&symbol=${bybitSymbol}&interval=D&start=${startMs}&end=${endMs}&limit=${limit}`,
   );
   if (!res.ok) throw new Error(`Bybit API 오류: ${res.status}`);
-  const json = await res.json() as { retCode: number; retMsg?: string; result: { list: string[][] } };
-  if (json.retCode !== 0) throw new Error(`Bybit API 오류: ${json.retMsg || json.retCode}`);
+  const json = (await res.json()) as {
+    retCode: number;
+    retMsg?: string;
+    result: { list: string[][] };
+  };
+  if (json.retCode !== 0)
+    throw new Error(`Bybit API 오류: ${json.retMsg || json.retCode}`);
 
   const klines = json.result.list;
-  if (!Array.isArray(klines) || klines.length < 2) throw new Error('가격 데이터가 부족합니다.');
+  if (!Array.isArray(klines) || klines.length < 2)
+    throw new Error("가격 데이터가 부족합니다.");
 
   // Bybit returns klines in REVERSE order (newest first) — must reverse
   klines.reverse();
@@ -51,15 +78,26 @@ async function fetchHistoricalPrices(symbol: string, startDate: string, endDate:
     const dayKey = new Date(ts).toISOString().slice(0, 10);
     const existing = dailyMap.get(dayKey);
     if (!existing) {
-      dailyMap.set(dayKey, { date: new Date(ts).toISOString(), timestamp: ts, price, high, low });
+      dailyMap.set(dayKey, {
+        date: new Date(ts).toISOString(),
+        timestamp: ts,
+        price,
+        high,
+        low,
+      });
     } else {
       existing.high = Math.max(existing.high, high);
       existing.low = Math.min(existing.low, low);
     }
   }
 
-  const result = Array.from(dailyMap.values()).sort((a, b) => a.timestamp - b.timestamp);
-  if (result.length < 2) throw new Error(`선택한 기간에 데이터가 부족합니다. 최근 1년 이내를 선택해주세요.`);
+  const result = Array.from(dailyMap.values()).sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
+  if (result.length < 2)
+    throw new Error(
+      `선택한 기간에 데이터가 부족합니다. 최근 1년 이내를 선택해주세요.`,
+    );
   return result;
 }
 
@@ -80,22 +118,31 @@ function calcEMASeries(prices: number[], period: number): number[] {
   const r = [...prices.slice(0, period - 1)];
   let e = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
   r.push(e);
-  for (let i = period; i < prices.length; i++) { e = prices[i] * k + e * (1 - k); r.push(e); }
+  for (let i = period; i < prices.length; i++) {
+    e = prices[i] * k + e * (1 - k);
+    r.push(e);
+  }
   return r;
 }
 
 function calcRSI(prices: number[], period: number = 14): number {
   if (prices.length < period + 1) return 50;
-  let g = 0, l = 0;
+  let g = 0,
+    l = 0;
   for (let i = prices.length - period; i < prices.length; i++) {
     const d = prices[i] - prices[i - 1];
-    if (d > 0) g += d; else l -= d;
+    if (d > 0) g += d;
+    else l -= d;
   }
   if (l === 0) return 100;
-  return 100 - 100 / (1 + (g / period) / (l / period));
+  return 100 - 100 / (1 + g / period / (l / period));
 }
 
-function calcMACD(prices: number[]): { line: number; signal: number; hist: number } {
+function calcMACD(prices: number[]): {
+  line: number;
+  signal: number;
+  hist: number;
+} {
   if (prices.length < 26) return { line: 0, signal: 0, hist: 0 };
   const e12 = calcEMASeries(prices, 12);
   const e26 = calcEMASeries(prices, 26);
@@ -107,17 +154,26 @@ function calcMACD(prices: number[]): { line: number; signal: number; hist: numbe
 }
 
 function calcBB(prices: number[], period: number, mult: number) {
-  if (prices.length < period) { const p = prices[prices.length - 1] || 0; return { u: p, m: p, l: p, width: 0 }; }
+  if (prices.length < period) {
+    const p = prices[prices.length - 1] || 0;
+    return { u: p, m: p, l: p, width: 0 };
+  }
   const s = prices.slice(-period);
   const m = s.reduce((a, b) => a + b, 0) / period;
   const std = Math.sqrt(s.reduce((sum, p) => sum + (p - m) ** 2, 0) / period);
-  return { u: m + mult * std, m, l: m - mult * std, width: std > 0 ? (2 * mult * std) / m * 100 : 0 };
+  return {
+    u: m + mult * std,
+    m,
+    l: m - mult * std,
+    width: std > 0 ? ((2 * mult * std) / m) * 100 : 0,
+  };
 }
 
 function calcATR(prices: number[], period: number = 14): number {
   if (prices.length < period + 1) return 0;
   let sum = 0;
-  for (let i = prices.length - period; i < prices.length; i++) sum += Math.abs(prices[i] - prices[i - 1]);
+  for (let i = prices.length - period; i < prices.length; i++)
+    sum += Math.abs(prices[i] - prices[i - 1]);
   return sum / period;
 }
 
@@ -144,37 +200,70 @@ function getTrend(prices: number[]): number {
 
 // ============ Metrics Builder ============
 
-function buildResult(trades: BacktestTrade[], equityCurve: { date: string; value: number }[], initialCapital: number, prices: DailyPrice[]): BacktestResult {
-  const sells = trades.filter(t => t.side === 'SELL');
-  const wins = sells.filter(t => t.pnl > 0);
-  const losses = sells.filter(t => t.pnl <= 0);
+function buildResult(
+  trades: BacktestTrade[],
+  equityCurve: { date: string; value: number }[],
+  initialCapital: number,
+  prices: DailyPrice[],
+): BacktestResult {
+  const sells = trades.filter((t) => t.side === "SELL");
+  const wins = sells.filter((t) => t.pnl > 0);
+  const losses = sells.filter((t) => t.pnl <= 0);
   const totalPnl = sells.reduce((s, t) => s + t.pnl, 0);
-  const totalReturn = initialCapital > 0 ? +((totalPnl / initialCapital) * 100).toFixed(2) : 0;
-  const winRate = sells.length > 0 ? +((wins.length / sells.length) * 100).toFixed(1) : 0;
+  const totalReturn =
+    initialCapital > 0 ? +((totalPnl / initialCapital) * 100).toFixed(2) : 0;
+  const winRate =
+    sells.length > 0 ? +((wins.length / sells.length) * 100).toFixed(1) : 0;
 
   const grossProfit = wins.reduce((s, t) => s + t.pnl, 0);
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
-  const profitFactor = grossLoss > 0 ? +(grossProfit / grossLoss).toFixed(2) : grossProfit > 0 ? 999 : 0;
+  const profitFactor =
+    grossLoss > 0
+      ? +(grossProfit / grossLoss).toFixed(2)
+      : grossProfit > 0
+        ? 999
+        : 0;
 
-  let maxDD = 0, peak = initialCapital;
-  for (const p of equityCurve) { if (p.value > peak) peak = p.value; const dd = (peak - p.value) / peak * 100; if (dd > maxDD) maxDD = dd; }
+  let maxDD = 0,
+    peak = initialCapital;
+  for (const p of equityCurve) {
+    if (p.value > peak) peak = p.value;
+    const dd = ((peak - p.value) / peak) * 100;
+    if (dd > maxDD) maxDD = dd;
+  }
 
   let sharpe = 0;
   if (equityCurve.length > 1) {
     const rets: number[] = [];
-    for (let i = 1; i < equityCurve.length; i++) rets.push((equityCurve[i].value - equityCurve[i - 1].value) / equityCurve[i - 1].value);
+    for (let i = 1; i < equityCurve.length; i++)
+      rets.push(
+        (equityCurve[i].value - equityCurve[i - 1].value) /
+          equityCurve[i - 1].value,
+      );
     const avg = rets.reduce((a, b) => a + b, 0) / rets.length;
-    const std = Math.sqrt(rets.reduce((s, r) => s + (r - avg) ** 2, 0) / rets.length);
+    const std = Math.sqrt(
+      rets.reduce((s, r) => s + (r - avg) ** 2, 0) / rets.length,
+    );
     sharpe = std > 0 ? +((avg / std) * Math.sqrt(365)).toFixed(2) : 0;
   }
 
-  const allP = prices.map(p => p.price);
+  const allP = prices.map((p) => p.price);
   return {
-    totalReturn, sharpeRatio: sharpe, maxDrawdown: +(-maxDD).toFixed(2), winRate,
-    totalTrades: trades.length, profitFactor, equityCurve,
+    totalReturn,
+    sharpeRatio: sharpe,
+    maxDrawdown: +(-maxDD).toFixed(2),
+    winRate,
+    totalTrades: trades.length,
+    profitFactor,
+    equityCurve,
     trades: trades.slice(0, 200),
-    dataSource: 'Bybit 실제 과거 데이터',
-    priceRange: { start: +allP[0].toFixed(2), end: +allP[allP.length - 1].toFixed(2), high: +Math.max(...allP).toFixed(2), low: +Math.min(...allP).toFixed(2) },
+    dataSource: "Bybit 실제 과거 데이터",
+    priceRange: {
+      start: +allP[0].toFixed(2),
+      end: +allP[allP.length - 1].toFixed(2),
+      high: +Math.max(...allP).toFixed(2),
+      low: +Math.min(...allP).toFixed(2),
+    },
   };
 }
 
@@ -182,11 +271,21 @@ function buildResult(trades: BacktestTrade[], equityCurve: { date: string; value
 // 핵심 원칙: 비대칭 리스크/리워드 (TP > SL), 과매도 진입, 빠른 이익 실현, 추세 필터
 
 // 1. DCA v2 - 스마트 적립식 + 능동적 이익 실현
-function backtestDCA(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const baseAmount = Number(params.investmentAmount || params.positionSize || 200);
+function backtestDCA(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const baseAmount = Number(
+    params.investmentAmount || params.positionSize || 200,
+  );
   const interval = Number(params.interval || 3);
-  let cash = capital, holdings = 0, avgEntry = 0, daysSince = interval;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0,
+    daysSince = interval;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price } of prices) {
@@ -203,19 +302,42 @@ function backtestDCA(prices: DailyPrice[], capital: number, params: Record<strin
         // RSI 과매수: 60% 매도
         const qty = holdings * 0.6;
         const pnl = (price - avgEntry) * qty;
-        cash += qty * price; holdings -= qty;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +pnl.toFixed(2), reason: `DCA 과매수 이익실현 (RSI ${r.toFixed(0)}, +${(pnlPct * 100).toFixed(1)}%)` });
+        cash += qty * price;
+        holdings -= qty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +pnl.toFixed(2),
+          reason: `DCA 과매수 이익실현 (RSI ${r.toFixed(0)}, +${(pnlPct * 100).toFixed(1)}%)`,
+        });
       } else if (pnlPct >= 0.04) {
         // +4% 이상: 40% 매도
         const qty = holdings * 0.4;
         const pnl = (price - avgEntry) * qty;
-        cash += qty * price; holdings -= qty;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +pnl.toFixed(2), reason: `DCA 목표 이익실현 (+${(pnlPct * 100).toFixed(1)}%)` });
+        cash += qty * price;
+        holdings -= qty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +pnl.toFixed(2),
+          reason: `DCA 목표 이익실현 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
       } else if (pnlPct <= -0.06 && trend < -0.5) {
         // 강한 하락추세에서 -6%: 전량 손절
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `DCA 추세 손절 (${(pnlPct * 100).toFixed(1)}%, 하락추세)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +pnl.toFixed(2),
+          reason: `DCA 추세 손절 (${(pnlPct * 100).toFixed(1)}%, 하락추세)`,
+        });
         holdings = 0;
       }
     }
@@ -238,9 +360,21 @@ function backtestDCA(prices: DailyPrice[], capital: number, params: Record<strin
 
       if (amount > 50 && cash >= amount) {
         const qty = amount / price;
-        avgEntry = holdings > 0 ? (avgEntry * holdings + price * qty) / (holdings + qty) : price;
-        cash -= amount; holdings += qty; daysSince = 0;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `스마트 DCA (RSI ${r.toFixed(0)}, 추세 ${trend > 0 ? '↑' : trend < 0 ? '↓' : '→'}, $${amount.toFixed(0)})` });
+        avgEntry =
+          holdings > 0
+            ? (avgEntry * holdings + price * qty) / (holdings + qty)
+            : price;
+        cash -= amount;
+        holdings += qty;
+        daysSince = 0;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `스마트 DCA (RSI ${r.toFixed(0)}, 추세 ${trend > 0 ? "↑" : trend < 0 ? "↓" : "→"}, $${amount.toFixed(0)})`,
+        });
       }
     }
     curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
@@ -248,24 +382,44 @@ function backtestDCA(prices: DailyPrice[], capital: number, params: Record<strin
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 2. GRID v3 - 보수적 추세 적응형 그리드
-function backtestGrid(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
+function backtestGrid(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
   const gridLevels = Number(params.gridLevels || 10);
-  const investPerGrid = Number(params.investPerGrid || params.positionSize || 200);
-  let cash = capital, holdings = 0, avgEntry = 0, lastLevel = -1;
+  const investPerGrid = Number(
+    params.investPerGrid || params.positionSize || 200,
+  );
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0,
+    lastLevel = -1;
   let cooldownDays = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price } of prices) {
     hist.push(price);
     if (cooldownDays > 0) cooldownDays--;
-    if (hist.length < 20) { curve.push({ date, value: +(cash + holdings * price).toFixed(2) }); continue; }
+    if (hist.length < 20) {
+      curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
+      continue;
+    }
 
     const bb = calcBB(hist, 20, 2.5);
     const r = calcRSI(hist, 14);
@@ -286,8 +440,16 @@ function backtestGrid(prices: DailyPrice[], capital: number, params: Record<stri
       if (pnlPct > 0.002) {
         const sellQty = Math.min(holdings, investPerGrid / price);
         const pnl = (price - avgEntry) * sellQty;
-        cash += sellQty * price; holdings -= sellQty;
-        trades.push({ date, side: 'SELL', price, quantity: sellQty, pnl: +pnl.toFixed(2), reason: `그리드 매도 (L${level}, +${(pnlPct * 100).toFixed(1)}%)` });
+        cash += sellQty * price;
+        holdings -= sellQty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: sellQty,
+          pnl: +pnl.toFixed(2),
+          reason: `그리드 매도 (L${level}, +${(pnlPct * 100).toFixed(1)}%)`,
+        });
       }
     }
 
@@ -302,9 +464,20 @@ function backtestGrid(prices: DailyPrice[], capital: number, params: Record<stri
         // 최대 노출도: 25%
         if (exposure < capital * 0.25 && amount <= cash && amount >= 30) {
           const qty = amount / price;
-          avgEntry = holdings > 0 ? (avgEntry * holdings + price * qty) / (holdings + qty) : price;
-          cash -= amount; holdings += qty;
-          trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `그리드 매수 (L${level}, RSI ${r.toFixed(0)}, $${amount.toFixed(0)})` });
+          avgEntry =
+            holdings > 0
+              ? (avgEntry * holdings + price * qty) / (holdings + qty)
+              : price;
+          cash -= amount;
+          holdings += qty;
+          trades.push({
+            date,
+            side: "BUY",
+            price,
+            quantity: qty,
+            pnl: 0,
+            reason: `그리드 매수 (L${level}, RSI ${r.toFixed(0)}, $${amount.toFixed(0)})`,
+          });
         }
       }
     }
@@ -315,7 +488,14 @@ function backtestGrid(prices: DailyPrice[], capital: number, params: Record<stri
       if (pnlPct <= -0.03) {
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `그리드 손절 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +pnl.toFixed(2),
+          reason: `그리드 손절 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
         cooldownDays = 3; // 손절 후 3일 쿨다운
       }
@@ -327,18 +507,32 @@ function backtestGrid(prices: DailyPrice[], capital: number, params: Record<stri
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 3. MOMENTUM v5 - 적응형 모멘텀 (상승/하락장 모두 대응)
-function backtestMomentum(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const sizePct = 0.20;
-  const tp = 0.03;   // +3% 익절
-  const sl = 0.02;   // -2% 손절 (비대칭 1.5:1)
-  let cash = capital, holdings = 0, avgEntry = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+function backtestMomentum(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const sizePct = 0.2;
+  const tp = 0.03; // +3% 익절
+  const sl = 0.02; // -2% 손절 (비대칭 1.5:1)
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
   let prevMacdHist = 0;
   let cooldown = 0;
@@ -346,24 +540,34 @@ function backtestMomentum(prices: DailyPrice[], capital: number, params: Record<
   for (const { date, price } of prices) {
     hist.push(price);
     if (cooldown > 0) cooldown--;
-    if (hist.length < 26) { curve.push({ date, value: +(cash + holdings * price).toFixed(2) }); continue; }
+    if (hist.length < 26) {
+      curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
+      continue;
+    }
 
     const r = calcRSI(hist, 14);
     const m = calcMACD(hist);
-    const e9 = calcEMA(hist, 9), e21 = calcEMA(hist, 21);
+    const e9 = calcEMA(hist, 9),
+      e21 = calcEMA(hist, 21);
     const trend = getTrend(hist);
     const bb = calcBB(hist, 20, 2);
     const z = calcZScore(hist, 20);
 
     if (holdings === 0 && cooldown === 0) {
-      let reason = '';
+      let reason = "";
 
       // 1) 과매도 반등: RSI < 32 + BB 하단 근접 (모든 시장환경)
       if (r < 32 && price < bb.l * 1.01) {
         reason = `과매도 반등 (RSI ${r.toFixed(0)}, Z=${z.toFixed(1)})`;
       }
       // 2) MACD 골든크로스 + 중립 이상 추세
-      else if (prevMacdHist < 0 && m.hist > 0 && trend >= -0.3 && r > 35 && r < 55) {
+      else if (
+        prevMacdHist < 0 &&
+        m.hist > 0 &&
+        trend >= -0.3 &&
+        r > 35 &&
+        r < 55
+      ) {
         reason = `MACD 골든크로스 (RSI ${r.toFixed(0)})`;
       }
       // 3) 전조건 정렬: EMA9>EMA21 + MACD+ + RSI 중립 + BB 하반
@@ -380,8 +584,17 @@ function backtestMomentum(prices: DailyPrice[], capital: number, params: Record<
         const adjSize = trend < -0.3 ? sizePct * 0.5 : sizePct;
         const amount = Math.min(cash * adjSize, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason });
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason,
+        });
       }
     } else if (holdings > 0) {
       const pnlPct = (price - avgEntry) / avgEntry;
@@ -390,21 +603,43 @@ function backtestMomentum(prices: DailyPrice[], capital: number, params: Record<
       if (pnlPct >= tp) {
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +pnl.toFixed(2),
+          reason: `익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // 부분 익절: +1.5%에서 절반
       else if (pnlPct >= 0.015) {
         const qty = holdings * 0.5;
         const pnl = (price - avgEntry) * qty;
-        cash += qty * price; holdings -= qty;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +pnl.toFixed(2), reason: `부분익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        cash += qty * price;
+        holdings -= qty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +pnl.toFixed(2),
+          reason: `부분익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
       }
       // 손절
       else if (pnlPct <= -sl) {
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +pnl.toFixed(2),
+          reason: `손절 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
         cooldown = 3;
       }
@@ -412,14 +647,28 @@ function backtestMomentum(prices: DailyPrice[], capital: number, params: Record<
       else if (r > 65 && pnlPct > 0) {
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `RSI 과매수 (${r.toFixed(0)})` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +pnl.toFixed(2),
+          reason: `RSI 과매수 (${r.toFixed(0)})`,
+        });
         holdings = 0;
       }
       // MACD 데드크로스 + 수익중
       else if (m.hist < 0 && prevMacdHist >= 0 && pnlPct > -0.005) {
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `MACD 데드크로스 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +pnl.toFixed(2),
+          reason: `MACD 데드크로스 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
     }
@@ -429,23 +678,40 @@ function backtestMomentum(prices: DailyPrice[], capital: number, params: Record<
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 4. MEAN_REVERSION v2 - 볼린저 밴드 + RSI 수렴 반등
-function backtestMeanReversion(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const sizePct = 0.30;
-  const tp = 0.035;   // +3.5% 익절
-  const sl = 0.02;    // -2% 손절 (비대칭 1.75:1)
-  let cash = capital, holdings = 0, avgEntry = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+function backtestMeanReversion(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const sizePct = 0.3;
+  const tp = 0.035; // +3.5% 익절
+  const sl = 0.02; // -2% 손절 (비대칭 1.75:1)
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price } of prices) {
     hist.push(price);
-    if (hist.length < 20) { curve.push({ date, value: +(cash + holdings * price).toFixed(2) }); continue; }
+    if (hist.length < 20) {
+      curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
+      continue;
+    }
 
     const bb20 = calcBB(hist, 20, 2);
     const bb25 = calcBB(hist, 20, 2.5);
@@ -456,15 +722,33 @@ function backtestMeanReversion(prices: DailyPrice[], capital: number, params: Re
       if (price < bb25.l && r < 35 && cash > 100) {
         const amount = Math.min(cash * sizePct * 1.2, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `BB(2.5σ)하단 매수 (RSI ${r.toFixed(0)})` });
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `BB(2.5σ)하단 매수 (RSI ${r.toFixed(0)})`,
+        });
       }
       // 2차 진입: BB(20,2) 하단 + RSI < 40
       else if (price < bb20.l && r < 40 && cash > 100) {
         const amount = Math.min(cash * sizePct, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `BB(2σ)하단 매수 (RSI ${r.toFixed(0)})` });
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `BB(2σ)하단 매수 (RSI ${r.toFixed(0)})`,
+        });
       }
     } else {
       const pnlPct = (price - avgEntry) / avgEntry;
@@ -472,23 +756,52 @@ function backtestMeanReversion(prices: DailyPrice[], capital: number, params: Re
       // 익절: BB 중간선 도달 또는 TP
       if (pnlPct >= tp) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       } else if (price >= bb20.m && pnlPct > 0.005) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `평균회귀 완료 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `평균회귀 완료 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // 부분 익절: RSI > 60 && 수익중
       else if (r > 60 && pnlPct > 0.01) {
         const qty = holdings * 0.5;
-        cash += qty * price; holdings -= qty;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +((price - avgEntry) * qty).toFixed(2), reason: `RSI 과매수 부분익절 (${r.toFixed(0)})` });
+        cash += qty * price;
+        holdings -= qty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +((price - avgEntry) * qty).toFixed(2),
+          reason: `RSI 과매수 부분익절 (${r.toFixed(0)})`,
+        });
       }
       // 손절
       else if (pnlPct <= -sl) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `손절 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
     }
@@ -497,16 +810,31 @@ function backtestMeanReversion(prices: DailyPrice[], capital: number, params: Re
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 5. TRAILING v5 - BB밴드 반등 + 트레일링 (MR 하이브리드)
-function backtestTrailing(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const sizePct = 0.20;
-  let cash = capital, holdings = 0, avgEntry = 0, highSince = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+function backtestTrailing(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const sizePct = 0.2;
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0,
+    highSince = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
   let cooldown = 0;
   let partialSold = false;
@@ -514,7 +842,10 @@ function backtestTrailing(prices: DailyPrice[], capital: number, params: Record<
   for (const { date, price, high } of prices) {
     hist.push(price);
     if (cooldown > 0) cooldown--;
-    if (hist.length < 20) { curve.push({ date, value: +(cash + holdings * price).toFixed(2) }); continue; }
+    if (hist.length < 20) {
+      curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
+      continue;
+    }
 
     const r = calcRSI(hist, 14);
     const bb = calcBB(hist, 20, 2);
@@ -523,7 +854,7 @@ function backtestTrailing(prices: DailyPrice[], capital: number, params: Record<
     const trailPct = Math.max(0.015, Math.min(0.04, (a / price) * 2));
 
     if (holdings === 0 && cooldown === 0) {
-      let reason = '';
+      let reason = "";
 
       // BB 하단 매수 (MEAN_REVERSION 스타일)
       // 1) BB(2.5σ) 하단 + RSI < 35 (강한 신호)
@@ -538,45 +869,91 @@ function backtestTrailing(prices: DailyPrice[], capital: number, params: Record<
       if (reason && cash > 100) {
         const amount = Math.min(cash * sizePct, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price; highSince = price;
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        highSince = price;
         partialSold = false;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason });
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason,
+        });
       }
     } else if (holdings > 0) {
       highSince = Math.max(highSince, high, price);
       const pnlPct = (price - avgEntry) / avgEntry;
-      const dropFromHigh = highSince > avgEntry ? (highSince - price) / highSince : 0;
+      const dropFromHigh =
+        highSince > avgEntry ? (highSince - price) / highSince : 0;
 
       // BB 중간선 도달 시 부분 매도 (MR 스타일 수익 확보)
       if (!partialSold && price >= bb.m && pnlPct > 0.003) {
         const qty = holdings * 0.5;
         cash += qty * price;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +((price - avgEntry) * qty).toFixed(2), reason: `BB중간선 부분매도 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +((price - avgEntry) * qty).toFixed(2),
+          reason: `BB중간선 부분매도 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings -= qty;
         partialSold = true;
       }
       // 트레일링 스탑: +1.5% 이상이면 가동
       else if (pnlPct >= 0.015 && dropFromHigh >= trailPct) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `트레일링 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `트레일링 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // BB 상단 도달 시 전량 매도
       else if (price >= bb.u && pnlPct > 0) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `BB상단 익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `BB상단 익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // 목표 익절: +3.5%
       else if (pnlPct >= 0.035) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // 손절: -2%
       else if (pnlPct <= -0.02) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `손절 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
         cooldown = 2;
       }
@@ -586,20 +963,38 @@ function backtestTrailing(prices: DailyPrice[], capital: number, params: Record<
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 6. MARTINGALE v2 - 보수적 마틴게일 + 비대칭 R/R
-function backtestMartingale(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const baseSize = Number(params.positionSize || params.investmentAmount || 200);
-  const maxMult = Number(params.maxMultiplier || 3);  // x3 캡 (x8에서 축소)
-  const tp = 0.03;  // +3% 익절
-  const sl = 0.015;  // -1.5% 손절 (비대칭 2:1)
+function backtestMartingale(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const baseSize = Number(
+    params.positionSize || params.investmentAmount || 200,
+  );
+  const maxMult = Number(params.maxMultiplier || 3); // x3 캡 (x8에서 축소)
+  const tp = 0.03; // +3% 익절
+  const sl = 0.015; // -1.5% 손절 (비대칭 2:1)
 
-  let cash = capital, holdings = 0, avgEntry = 0, mult = 1, consecutiveLoss = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0,
+    mult = 1,
+    consecutiveLoss = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price } of prices) {
@@ -616,8 +1011,17 @@ function backtestMartingale(prices: DailyPrice[], capital: number, params: Recor
         const size = Math.min(baseSize * mult, cash * 0.35);
         if (size >= 30 && cash >= size) {
           const qty = size / price;
-          cash -= size; holdings = qty; avgEntry = price;
-          trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `마틴게일 매수 (x${mult}, RSI ${r.toFixed(0)}, $${size.toFixed(0)})` });
+          cash -= size;
+          holdings = qty;
+          avgEntry = price;
+          trades.push({
+            date,
+            side: "BUY",
+            price,
+            quantity: qty,
+            pnl: 0,
+            reason: `마틴게일 매수 (x${mult}, RSI ${r.toFixed(0)}, $${size.toFixed(0)})`,
+          });
         }
       }
     } else {
@@ -625,19 +1029,43 @@ function backtestMartingale(prices: DailyPrice[], capital: number, params: Recor
       if (pnlPct >= tp) {
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `익절 (+${(pnlPct * 100).toFixed(1)}%) → x1 리셋` });
-        holdings = 0; mult = 1; consecutiveLoss = 0;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +pnl.toFixed(2),
+          reason: `익절 (+${(pnlPct * 100).toFixed(1)}%) → x1 리셋`,
+        });
+        holdings = 0;
+        mult = 1;
+        consecutiveLoss = 0;
       } else if (pnlPct <= -sl) {
         const pnl = (price - avgEntry) * holdings;
         cash += holdings * price;
         consecutiveLoss++;
         // 3연패 이상이면 배율 리셋 (무한 손실 방지)
         if (consecutiveLoss >= 3) {
-          mult = 1; consecutiveLoss = 0;
-          trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `손절 + 3연패 리셋 (${(pnlPct * 100).toFixed(1)}%) → x1` });
+          mult = 1;
+          consecutiveLoss = 0;
+          trades.push({
+            date,
+            side: "SELL",
+            price,
+            quantity: holdings,
+            pnl: +pnl.toFixed(2),
+            reason: `손절 + 3연패 리셋 (${(pnlPct * 100).toFixed(1)}%) → x1`,
+          });
         } else {
           mult = Math.min(mult * 1.5, maxMult);
-          trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2), reason: `손절 (${(pnlPct * 100).toFixed(1)}%) → x${mult.toFixed(1)}` });
+          trades.push({
+            date,
+            side: "SELL",
+            price,
+            quantity: holdings,
+            pnl: +pnl.toFixed(2),
+            reason: `손절 (${(pnlPct * 100).toFixed(1)}%) → x${mult.toFixed(1)}`,
+          });
         }
         holdings = 0;
       }
@@ -647,24 +1075,41 @@ function backtestMartingale(prices: DailyPrice[], capital: number, params: Recor
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 7. SCALPING v2 - 고빈도 스캘핑 (일중 시뮬레이션)
-function backtestScalping(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const sizePct = 0.20;
-  const tp = 0.010;   // +1.0% 익절
-  const sl = 0.012;   // -1.2% 손절 (거의 대칭, 높은 승률로 커버)
+function backtestScalping(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const sizePct = 0.2;
+  const tp = 0.01; // +1.0% 익절
+  const sl = 0.012; // -1.2% 손절 (거의 대칭, 높은 승률로 커버)
 
-  let cash = capital, holdings = 0, avgEntry = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price, high, low } of prices) {
     hist.push(price);
-    if (hist.length < 10) { curve.push({ date, value: +(cash + holdings * price).toFixed(2) }); continue; }
+    if (hist.length < 10) {
+      curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
+      continue;
+    }
 
     // 일중 가격 시뮬레이션 (low → mid_low → mid_high → high → close)
     const intraday = [low, (low + price) / 2, (high + price) / 2, high, price];
@@ -678,32 +1123,71 @@ function backtestScalping(prices: DailyPrice[], capital: number, params: Record<
         if (p < bb10.l && r7 < 35 && cash > 100) {
           const amount = Math.min(cash * sizePct, cash - 100);
           const qty = amount / p;
-          cash -= amount; holdings = qty; avgEntry = p;
-          trades.push({ date, side: 'BUY', price: p, quantity: qty, pnl: 0, reason: `스캘핑 BB하단 (RSI7 ${r7.toFixed(0)})` });
+          cash -= amount;
+          holdings = qty;
+          avgEntry = p;
+          trades.push({
+            date,
+            side: "BUY",
+            price: p,
+            quantity: qty,
+            pnl: 0,
+            reason: `스캘핑 BB하단 (RSI7 ${r7.toFixed(0)})`,
+          });
         }
         // 매수 시그널 2: 급락 반등 (저가가 평균 대비 -2% 이상)
         else if (p <= low * 1.002 && r7 < 30 && cash > 100) {
           const amount = Math.min(cash * sizePct * 0.8, cash - 100);
           const qty = amount / p;
-          cash -= amount; holdings = qty; avgEntry = p;
-          trades.push({ date, side: 'BUY', price: p, quantity: qty, pnl: 0, reason: `스캘핑 급락반등 (RSI7 ${r7.toFixed(0)})` });
+          cash -= amount;
+          holdings = qty;
+          avgEntry = p;
+          trades.push({
+            date,
+            side: "BUY",
+            price: p,
+            quantity: qty,
+            pnl: 0,
+            reason: `스캘핑 급락반등 (RSI7 ${r7.toFixed(0)})`,
+          });
         }
       } else {
         const pnlPct = (p - avgEntry) / avgEntry;
         if (pnlPct >= tp) {
           const pnl = (p - avgEntry) * holdings;
           cash += holdings * p;
-          trades.push({ date, side: 'SELL', price: p, quantity: holdings, pnl: +pnl.toFixed(2), reason: `스캘핑 익절 (+${(pnlPct * 100).toFixed(2)}%)` });
+          trades.push({
+            date,
+            side: "SELL",
+            price: p,
+            quantity: holdings,
+            pnl: +pnl.toFixed(2),
+            reason: `스캘핑 익절 (+${(pnlPct * 100).toFixed(2)}%)`,
+          });
           holdings = 0;
         } else if (pnlPct <= -sl) {
           const pnl = (p - avgEntry) * holdings;
           cash += holdings * p;
-          trades.push({ date, side: 'SELL', price: p, quantity: holdings, pnl: +pnl.toFixed(2), reason: `스캘핑 손절 (${(pnlPct * 100).toFixed(2)}%)` });
+          trades.push({
+            date,
+            side: "SELL",
+            price: p,
+            quantity: holdings,
+            pnl: +pnl.toFixed(2),
+            reason: `스캘핑 손절 (${(pnlPct * 100).toFixed(2)}%)`,
+          });
           holdings = 0;
         } else if (r7 > 72) {
           const pnl = (p - avgEntry) * holdings;
           cash += holdings * p;
-          trades.push({ date, side: 'SELL', price: p, quantity: holdings, pnl: +pnl.toFixed(2), reason: `스캘핑 RSI매도 (${r7.toFixed(0)})` });
+          trades.push({
+            date,
+            side: "SELL",
+            price: p,
+            quantity: holdings,
+            pnl: +pnl.toFixed(2),
+            reason: `스캘핑 RSI매도 (${r7.toFixed(0)})`,
+          });
           holdings = 0;
         }
       }
@@ -713,26 +1197,43 @@ function backtestScalping(prices: DailyPrice[], capital: number, params: Record<
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 8. STAT_ARB v2 - Z-Score 평균회귀 + RSI 이중 필터
-function backtestStatArb(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const sizePct = 0.30;
+function backtestStatArb(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const sizePct = 0.3;
   const entryZ = Number(params.entryZScore || -1.8);
-  const exitZ = 0;  // 평균으로 회귀하면 청산
-  const tp = 0.035;  // +3.5%
-  const sl = 0.02;   // -2% (비대칭 1.75:1)
+  const exitZ = 0; // 평균으로 회귀하면 청산
+  const tp = 0.035; // +3.5%
+  const sl = 0.02; // -2% (비대칭 1.75:1)
 
-  let cash = capital, holdings = 0, avgEntry = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price } of prices) {
     hist.push(price);
-    if (hist.length < 20) { curve.push({ date, value: +(cash + holdings * price).toFixed(2) }); continue; }
+    if (hist.length < 20) {
+      curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
+      continue;
+    }
 
     const z = calcZScore(hist, 20);
     const r = calcRSI(hist, 14);
@@ -744,8 +1245,17 @@ function backtestStatArb(prices: DailyPrice[], capital: number, params: Record<s
         const sizeAdj = z < -2.5 ? 1.3 : 1.0;
         const amount = Math.min(cash * sizePct * sizeAdj, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `Z-Score 매수 (Z=${z.toFixed(2)}, RSI ${r.toFixed(0)})` });
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `Z-Score 매수 (Z=${z.toFixed(2)}, RSI ${r.toFixed(0)})`,
+        });
       }
     } else {
       const pnlPct = (price - avgEntry) / avgEntry;
@@ -753,25 +1263,54 @@ function backtestStatArb(prices: DailyPrice[], capital: number, params: Record<s
       // 평균 회귀: Z >= 0
       if (z >= exitZ && pnlPct > 0) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `Z 회귀 (Z=${z.toFixed(2)}, +${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `Z 회귀 (Z=${z.toFixed(2)}, +${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // 익절
       else if (pnlPct >= tp) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `목표 익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // RSI 과매수: 부분 익절
       else if (r > 65 && pnlPct > 0.005) {
         const qty = holdings * 0.5;
-        cash += qty * price; holdings -= qty;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +((price - avgEntry) * qty).toFixed(2), reason: `RSI 과매수 부분익절 (${r.toFixed(0)})` });
+        cash += qty * price;
+        holdings -= qty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +((price - avgEntry) * qty).toFixed(2),
+          reason: `RSI 과매수 부분익절 (${r.toFixed(0)})`,
+        });
       }
       // 손절
       else if (pnlPct <= -sl) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `손절 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
     }
@@ -780,18 +1319,32 @@ function backtestStatArb(prices: DailyPrice[], capital: number, params: Record<s
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 9. FUNDING_ARB v2 - 펀딩비 차익거래 + 모멘텀 필터
-function backtestFundingArb(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const sizePct = 0.30;
-  const tp = 0.03;   // +3%
-  const sl = 0.02;   // -2%
-  let cash = capital, holdings = 0, avgEntry = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+function backtestFundingArb(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const sizePct = 0.3;
+  const tp = 0.03; // +3%
+  const sl = 0.02; // -2%
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (let i = 0; i < prices.length; i++) {
@@ -802,8 +1355,20 @@ function backtestFundingArb(prices: DailyPrice[], capital: number, params: Recor
     let funding = 0;
     if (hist.length > 5) {
       const change5d = (price - hist[hist.length - 6]) / hist[hist.length - 6];
-      funding = change5d > 0.08 ? 0.04 : change5d > 0.04 ? 0.02 : change5d > 0.01 ? 0.005 :
-                change5d < -0.08 ? -0.04 : change5d < -0.04 ? -0.02 : change5d < -0.01 ? -0.005 : 0;
+      funding =
+        change5d > 0.08
+          ? 0.04
+          : change5d > 0.04
+            ? 0.02
+            : change5d > 0.01
+              ? 0.005
+              : change5d < -0.08
+                ? -0.04
+                : change5d < -0.04
+                  ? -0.02
+                  : change5d < -0.01
+                    ? -0.005
+                    : 0;
     }
     const r = hist.length > 14 ? calcRSI(hist, 14) : 50;
 
@@ -812,40 +1377,87 @@ function backtestFundingArb(prices: DailyPrice[], capital: number, params: Recor
       if (funding < -0.01 && r < 50 && cash > 100) {
         const amount = Math.min(cash * sizePct, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `펀딩차익 롱 (펀딩 ${(funding * 100).toFixed(2)}%, RSI ${r.toFixed(0)})` });
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `펀딩차익 롱 (펀딩 ${(funding * 100).toFixed(2)}%, RSI ${r.toFixed(0)})`,
+        });
       }
       // 진입 2: 급락 후 과매도 → 펀딩비 음전환 기대
       else if (r < 30 && cash > 100) {
         const amount = Math.min(cash * sizePct * 0.8, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `펀딩차익 과매도 매수 (RSI ${r.toFixed(0)})` });
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `펀딩차익 과매도 매수 (RSI ${r.toFixed(0)})`,
+        });
       }
     } else {
       const pnlPct = (price - avgEntry) / avgEntry;
       // 펀딩비 양전환: 청산
       if (funding > 0.025) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `펀딩 양전환 청산 (${(funding * 100).toFixed(2)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `펀딩 양전환 청산 (${(funding * 100).toFixed(2)}%)`,
+        });
         holdings = 0;
       }
       // 익절
       else if (pnlPct >= tp) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // RSI 과매수 부분 익절
       else if (r > 65 && pnlPct > 0.005) {
         const qty = holdings * 0.5;
-        cash += qty * price; holdings -= qty;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +((price - avgEntry) * qty).toFixed(2), reason: `RSI과매수 부분익절 (${r.toFixed(0)})` });
+        cash += qty * price;
+        holdings -= qty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +((price - avgEntry) * qty).toFixed(2),
+          reason: `RSI과매수 부분익절 (${r.toFixed(0)})`,
+        });
       }
       // 손절
       else if (pnlPct <= -sl) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `손절 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `손절 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
     }
@@ -854,24 +1466,42 @@ function backtestFundingArb(prices: DailyPrice[], capital: number, params: Recor
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 10. RL_AGENT v2 - 가중 앙상블 AI + 동적 포지션 사이징
-function backtestRLAgent(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  let cash = capital, holdings = 0, avgEntry = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+function backtestRLAgent(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price } of prices) {
     hist.push(price);
-    if (hist.length < 26) { curve.push({ date, value: +(cash + holdings * price).toFixed(2) }); continue; }
+    if (hist.length < 26) {
+      curve.push({ date, value: +(cash + holdings * price).toFixed(2) });
+      continue;
+    }
 
     const r = calcRSI(hist, 14);
     const m = calcMACD(hist);
-    const e9 = calcEMA(hist, 9), e21 = calcEMA(hist, 21);
+    const e9 = calcEMA(hist, 9),
+      e21 = calcEMA(hist, 21);
     const b = calcBB(hist, 20, 2);
     const z = calcZScore(hist, 20);
     const trend = getTrend(hist);
@@ -879,15 +1509,24 @@ function backtestRLAgent(prices: DailyPrice[], capital: number, params: Record<s
     // 가중 점수 계산 (-10 ~ +10)
     let score = 0;
     // RSI (가중치 2): 가장 신뢰성 높은 단일 지표
-    if (r < 30) score += 2; else if (r < 40) score += 1; else if (r > 70) score -= 2; else if (r > 60) score -= 1;
+    if (r < 30) score += 2;
+    else if (r < 40) score += 1;
+    else if (r > 70) score -= 2;
+    else if (r > 60) score -= 1;
     // BB 위치 (가중치 2): 평균회귀
-    if (price < b.l) score += 2; else if (price > b.u) score -= 2;
+    if (price < b.l) score += 2;
+    else if (price > b.u) score -= 2;
     // Z-Score (가중치 1.5)
-    if (z < -2) score += 1.5; else if (z < -1.5) score += 1; else if (z > 2) score -= 1.5; else if (z > 1.5) score -= 1;
+    if (z < -2) score += 1.5;
+    else if (z < -1.5) score += 1;
+    else if (z > 2) score -= 1.5;
+    else if (z > 1.5) score -= 1;
     // EMA 크로스 (가중치 1)
-    if (e9 > e21) score += 1; else score -= 1;
+    if (e9 > e21) score += 1;
+    else score -= 1;
     // MACD (가중치 1)
-    if (m.hist > 0) score += 1; else if (m.hist < 0) score -= 1;
+    if (m.hist > 0) score += 1;
+    else if (m.hist < 0) score -= 1;
     // 추세 보정 (가중치 0.5)
     score += trend * 0.5;
 
@@ -895,11 +1534,20 @@ function backtestRLAgent(prices: DailyPrice[], capital: number, params: Record<s
       // 진입: 점수 3 이상 (높은 확신)
       if (score >= 3 && cash > 100) {
         // 동적 포지션 사이징: 점수에 비례
-        const sizePct = Math.min(0.15 + (score - 3) * 0.05, 0.40);
+        const sizePct = Math.min(0.15 + (score - 3) * 0.05, 0.4);
         const amount = Math.min(cash * sizePct, cash - 100);
         const qty = amount / price;
-        cash -= amount; holdings = qty; avgEntry = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0, reason: `AI 매수 (점수 ${score.toFixed(1)}, RSI ${r.toFixed(0)}, ${(sizePct * 100).toFixed(0)}%)` });
+        cash -= amount;
+        holdings = qty;
+        avgEntry = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `AI 매수 (점수 ${score.toFixed(1)}, RSI ${r.toFixed(0)}, ${(sizePct * 100).toFixed(0)}%)`,
+        });
       }
     } else {
       const pnlPct = (price - avgEntry) / avgEntry;
@@ -907,31 +1555,67 @@ function backtestRLAgent(prices: DailyPrice[], capital: number, params: Record<s
       // 강한 매도 시그널
       if (score <= -3) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `AI 강한 매도 (점수 ${score.toFixed(1)})` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `AI 강한 매도 (점수 ${score.toFixed(1)})`,
+        });
         holdings = 0;
       }
       // 익절: +5%
       else if (pnlPct >= 0.05) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `AI 익절 (+${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `AI 익절 (+${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // 손절: -2.5%
       else if (pnlPct <= -0.025) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `AI 손절 (${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `AI 손절 (${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
       // 부분 매도: 약한 매도 시그널 + 수익 중
       else if (score <= -1 && pnlPct > 0.01) {
         const qty = holdings * 0.5;
-        cash += qty * price; holdings -= qty;
-        trades.push({ date, side: 'SELL', price, quantity: qty, pnl: +((price - avgEntry) * qty).toFixed(2), reason: `AI 부분매도 (점수 ${score.toFixed(1)}, +${(pnlPct * 100).toFixed(1)}%)` });
+        cash += qty * price;
+        holdings -= qty;
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: qty,
+          pnl: +((price - avgEntry) * qty).toFixed(2),
+          reason: `AI 부분매도 (점수 ${score.toFixed(1)}, +${(pnlPct * 100).toFixed(1)}%)`,
+        });
       }
       // RSI 기반 익절
       else if (r > 68 && pnlPct > 0.005) {
         cash += holdings * price;
-        trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +((price - avgEntry) * holdings).toFixed(2), reason: `AI RSI매도 (${r.toFixed(0)}, +${(pnlPct * 100).toFixed(1)}%)` });
+        trades.push({
+          date,
+          side: "SELL",
+          price,
+          quantity: holdings,
+          pnl: +((price - avgEntry) * holdings).toFixed(2),
+          reason: `AI RSI매도 (${r.toFixed(0)}, +${(pnlPct * 100).toFixed(1)}%)`,
+        });
         holdings = 0;
       }
     }
@@ -940,100 +1624,182 @@ function backtestRLAgent(prices: DailyPrice[], capital: number, params: Record<s
 
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings, pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // 11. ENSEMBLE - 지표 기반 일별 투표 앙상블 (다중 전략 결합)
-function backtestEnsemble(prices: DailyPrice[], capital: number, params: Record<string, unknown>): BacktestResult {
-  const strategiesParam = (params.strategies as string[]) || ['DCA', 'MOMENTUM', 'STAT_ARB'];
+function backtestEnsemble(
+  prices: DailyPrice[],
+  capital: number,
+  params: Record<string, unknown>,
+): BacktestResult {
+  const strategiesParam = (params.strategies as string[]) || [
+    "DCA",
+    "MOMENTUM",
+    "STAT_ARB",
+  ];
   const weightsParam = (params.weights as Record<string, number>) || {};
 
-  const VALID = ['DCA', 'GRID', 'MOMENTUM', 'MEAN_REVERSION', 'TRAILING', 'MARTINGALE', 'SCALPING', 'STAT_ARB', 'FUNDING_ARB', 'RL_AGENT'];
-  const activeStrategies = strategiesParam.filter(s => VALID.includes(s));
-  if (activeStrategies.length === 0) activeStrategies.push('DCA', 'MOMENTUM', 'STAT_ARB');
+  const VALID = [
+    "DCA",
+    "GRID",
+    "MOMENTUM",
+    "MEAN_REVERSION",
+    "TRAILING",
+    "MARTINGALE",
+    "SCALPING",
+    "STAT_ARB",
+    "FUNDING_ARB",
+    "RL_AGENT",
+  ];
+  const activeStrategies = strategiesParam.filter((s) => VALID.includes(s));
+  if (activeStrategies.length === 0)
+    activeStrategies.push("DCA", "MOMENTUM", "STAT_ARB");
 
   // 지표 기반 시그널 함수: 매일 RSI/MACD/BB/EMA/trend 기반으로 BUY/SELL/HOLD 판단
-  type Signal = 'BUY' | 'SELL' | 'HOLD';
-  type SignalFn = (ind: { rsi: number; rsi7: number; macd: { line: number; signal: number; hist: number }; bb: { u: number; m: number; l: number; width: number }; ema9: number; ema21: number; atr: number; zScore: number; trend: number; price: number; prevPrice: number; peak: number; hasPosition: boolean; pnlPct: number }) => Signal;
+  type Signal = "BUY" | "SELL" | "HOLD";
+  type SignalFn = (ind: {
+    rsi: number;
+    rsi7: number;
+    macd: { line: number; signal: number; hist: number };
+    bb: { u: number; m: number; l: number; width: number };
+    ema9: number;
+    ema21: number;
+    atr: number;
+    zScore: number;
+    trend: number;
+    price: number;
+    prevPrice: number;
+    peak: number;
+    hasPosition: boolean;
+    pnlPct: number;
+  }) => Signal;
 
   const signalFns: Record<string, SignalFn> = {
     DCA: (ind) => {
-      if (ind.hasPosition && ind.rsi > 68 && ind.pnlPct > 0.005) return 'SELL';
-      if (ind.hasPosition && ind.pnlPct >= 0.04) return 'SELL';
-      if (ind.hasPosition && ind.pnlPct <= -0.06 && ind.trend < -0.5) return 'SELL';
-      if (ind.rsi < 40 && ind.trend >= -0.3) return 'BUY';
-      return 'HOLD';
+      // DCA는 꾸준히 매수하는 전략 - 가장 관대한 BUY 조건
+      if (ind.hasPosition && ind.rsi > 70 && ind.pnlPct > 0.01) return "SELL";
+      if (ind.hasPosition && ind.pnlPct >= 0.05) return "SELL";
+      if (ind.hasPosition && ind.pnlPct <= -0.08) return "SELL";
+      if (ind.rsi < 55) return "BUY"; // 중립 이하면 매수 (적립식)
+      return "HOLD";
     },
     GRID: (ind) => {
-      if (ind.hasPosition && ind.price > ind.bb.u * 0.98 && ind.pnlPct > 0) return 'SELL';
-      if (ind.price < ind.bb.l * 1.02 && ind.rsi < 40) return 'BUY';
-      return 'HOLD';
+      if (ind.hasPosition && ind.price > ind.bb.u * 0.98 && ind.pnlPct > 0)
+        return "SELL";
+      if (ind.hasPosition && ind.rsi > 65) return "SELL";
+      if (ind.price < ind.bb.m && ind.rsi < 50) return "BUY"; // BB 중간선 아래 + RSI 50 미만
+      return "HOLD";
     },
     MOMENTUM: (ind) => {
-      if (ind.hasPosition && (ind.ema9 < ind.ema21 || ind.macd.hist < 0) && ind.rsi > 55) return 'SELL';
-      if (ind.ema9 > ind.ema21 && ind.macd.hist > 0 && ind.trend > 0) return 'BUY';
-      return 'HOLD';
+      if (
+        ind.hasPosition &&
+        ind.ema9 < ind.ema21 &&
+        ind.macd.hist < 0 &&
+        ind.rsi > 50
+      )
+        return "SELL";
+      if (ind.hasPosition && ind.pnlPct >= 0.06) return "SELL";
+      // MACD 양수이거나 EMA 골든크로스면 매수
+      if (ind.macd.hist > 0 && (ind.ema9 > ind.ema21 || ind.trend > -0.2))
+        return "BUY";
+      if (ind.ema9 > ind.ema21 && ind.rsi < 60) return "BUY";
+      return "HOLD";
     },
     MEAN_REVERSION: (ind) => {
-      if (ind.hasPosition && (ind.rsi > 65 || ind.zScore > 1.0)) return 'SELL';
-      if (ind.rsi < 32 && ind.zScore < -1.0) return 'BUY';
-      return 'HOLD';
+      if (ind.hasPosition && (ind.rsi > 62 || ind.zScore > 0.8)) return "SELL";
+      if (ind.hasPosition && ind.pnlPct >= 0.04) return "SELL";
+      // RSI 과매도 또는 BB 하단 접근 시 매수
+      if (ind.rsi < 42 && ind.zScore < -0.5) return "BUY";
+      if (ind.rsi < 35) return "BUY"; // 극단적 과매도는 무조건
+      if (ind.price < ind.bb.l * 1.02 && ind.rsi < 45) return "BUY";
+      return "HOLD";
     },
     TRAILING: (ind) => {
-      if (ind.hasPosition && ind.price < ind.peak - ind.atr * 1.5) return 'SELL';
-      if (ind.trend > 0.3 && ind.rsi < 55 && ind.macd.hist > 0) return 'BUY';
-      return 'HOLD';
+      if (ind.hasPosition && ind.price < ind.peak - ind.atr * 1.5)
+        return "SELL";
+      if (ind.hasPosition && ind.pnlPct >= 0.05) return "SELL";
+      // 추세 양수이거나 MACD 반전 시 매수
+      if (ind.trend > 0 && ind.rsi < 58) return "BUY";
+      if (ind.macd.hist > 0 && ind.trend > -0.3 && ind.rsi < 50) return "BUY";
+      return "HOLD";
     },
     MARTINGALE: (ind) => {
-      if (ind.hasPosition && ind.pnlPct > 0.02) return 'SELL';
-      if (ind.rsi < 35 && ind.trend > -0.8) return 'BUY';
-      return 'HOLD';
+      if (ind.hasPosition && ind.pnlPct > 0.025) return "SELL";
+      if (ind.hasPosition && ind.rsi > 65) return "SELL";
+      if (ind.rsi < 42 && ind.trend > -0.8) return "BUY";
+      if (ind.rsi < 35) return "BUY"; // 급락 시 적극 매수
+      return "HOLD";
     },
     SCALPING: (ind) => {
-      if (ind.hasPosition && (ind.rsi > 62 || ind.pnlPct > 0.015)) return 'SELL';
-      if (ind.rsi < 38 && ind.price < ind.bb.m && ind.ema9 > ind.ema21 * 0.998) return 'BUY';
-      return 'HOLD';
+      if (ind.hasPosition && (ind.rsi > 60 || ind.pnlPct > 0.02)) return "SELL";
+      // BB 중간선 아래 + EMA 근접 시 매수
+      if (ind.rsi < 42 && ind.price < ind.bb.m) return "BUY";
+      if (ind.rsi < 38 && ind.ema9 > ind.ema21 * 0.995) return "BUY";
+      return "HOLD";
     },
     STAT_ARB: (ind) => {
-      if (ind.hasPosition && ind.zScore > 0.5) return 'SELL';
-      if (ind.zScore < -1.5 && ind.rsi < 40) return 'BUY';
-      return 'HOLD';
+      if (ind.hasPosition && ind.zScore > 0.5) return "SELL";
+      if (ind.hasPosition && ind.pnlPct >= 0.03) return "SELL";
+      // zScore 낮으면 평균 회귀 기대
+      if (ind.zScore < -1.0 && ind.rsi < 50) return "BUY";
+      if (ind.zScore < -0.8 && ind.rsi < 40) return "BUY";
+      return "HOLD";
     },
     FUNDING_ARB: (ind) => {
-      if (ind.hasPosition && ind.pnlPct > 0.01) return 'SELL';
-      if (ind.rsi < 45 && ind.zScore < -0.5 && ind.trend > -0.5) return 'BUY';
-      return 'HOLD';
+      if (ind.hasPosition && ind.pnlPct > 0.015) return "SELL";
+      if (ind.hasPosition && ind.rsi > 65) return "SELL";
+      if (ind.rsi < 48 && ind.zScore < -0.3) return "BUY";
+      return "HOLD";
     },
     RL_AGENT: (ind) => {
       // 복합 지표 점수 기반 결정
       let score = 0;
-      if (ind.rsi < 35) score += 2; else if (ind.rsi < 45) score += 1;
-      if (ind.rsi > 65) score -= 2; else if (ind.rsi > 55) score -= 1;
-      if (ind.macd.hist > 0) score += 1; else score -= 1;
-      if (ind.trend > 0) score += 1; else if (ind.trend < 0) score -= 1;
-      if (ind.zScore < -1) score += 1; else if (ind.zScore > 1) score -= 1;
-      if (ind.price < ind.bb.m) score += 1; else score -= 1;
-      if (ind.hasPosition && score <= -2) return 'SELL';
-      if (ind.hasPosition && ind.pnlPct > 0.03) return 'SELL';
-      if (!ind.hasPosition && score >= 3) return 'BUY';
-      if (ind.hasPosition && score >= 2) return 'HOLD';
-      if (ind.hasPosition && score <= -1 && ind.pnlPct < -0.03) return 'SELL';
-      return 'HOLD';
+      if (ind.rsi < 35) score += 2;
+      else if (ind.rsi < 48) score += 1;
+      if (ind.rsi > 65) score -= 2;
+      else if (ind.rsi > 55) score -= 1;
+      if (ind.macd.hist > 0) score += 1;
+      else score -= 1;
+      if (ind.trend > 0) score += 1;
+      else if (ind.trend < -0.5) score -= 1;
+      if (ind.zScore < -0.8) score += 1;
+      else if (ind.zScore > 1) score -= 1;
+      if (ind.price < ind.bb.m) score += 1;
+      else score -= 1;
+      if (ind.hasPosition && score <= -2) return "SELL";
+      if (ind.hasPosition && ind.pnlPct > 0.03) return "SELL";
+      if (score >= 2) return "BUY"; // 2점 이상이면 매수 (was 3)
+      if (ind.hasPosition && score <= -1 && ind.pnlPct < -0.03) return "SELL";
+      return "HOLD";
     },
   };
 
-  // 투표 임계값 (비율 0~1). 프론트엔드가 구형 1.5/-1.5 형식을 보내면 0.4로 변환
-  let buyThreshold = Number(params.buyThreshold ?? 0.4);
-  let sellThreshold = Math.abs(Number(params.sellThreshold ?? -0.4));
-  if (buyThreshold > 1.0) buyThreshold = buyThreshold / (activeStrategies.length + 1);
-  if (sellThreshold > 1.0) sellThreshold = sellThreshold / (activeStrategies.length + 1);
-  buyThreshold = Math.max(0.2, Math.min(buyThreshold, 0.8));
-  sellThreshold = Math.max(0.2, Math.min(sellThreshold, 0.8));
+  // 투표 임계값 (비율 0~1). 프론트엔드가 구형 1.5/-1.5 형식을 보내면 변환
+  let buyThreshold = Number(params.buyThreshold ?? 0.3);
+  let sellThreshold = Math.abs(Number(params.sellThreshold ?? -0.3));
+  if (buyThreshold > 1.0)
+    buyThreshold = buyThreshold / (activeStrategies.length + 1);
+  if (sellThreshold > 1.0)
+    sellThreshold = sellThreshold / (activeStrategies.length + 1);
+  buyThreshold = Math.max(0.15, Math.min(buyThreshold, 0.7));
+  sellThreshold = Math.max(0.15, Math.min(sellThreshold, 0.7));
 
-  let cash = capital, holdings = 0, avgEntry = 0, peak = 0;
-  const trades: BacktestTrade[] = [], curve: { date: string; value: number }[] = [];
+  let cash = capital,
+    holdings = 0,
+    avgEntry = 0,
+    peak = 0;
+  const trades: BacktestTrade[] = [],
+    curve: { date: string; value: number }[] = [];
   const hist: number[] = [];
 
   for (const { date, price } of prices) {
@@ -1057,13 +1823,32 @@ function backtestEnsemble(prices: DailyPrice[], capital: number, params: Record<
     const trend = getTrend(hist);
     const prevPrice = hist.length > 1 ? hist[hist.length - 2] : price;
     const hasPosition = holdings > 0;
-    const pnlPct = hasPosition && avgEntry > 0 ? (price - avgEntry) / avgEntry : 0;
+    const pnlPct =
+      hasPosition && avgEntry > 0 ? (price - avgEntry) / avgEntry : 0;
 
-    const ind = { rsi, rsi7, macd, bb, ema9, ema21, atr, zScore, trend, price, prevPrice, peak, hasPosition, pnlPct };
+    const ind = {
+      rsi,
+      rsi7,
+      macd,
+      bb,
+      ema9,
+      ema21,
+      atr,
+      zScore,
+      trend,
+      price,
+      prevPrice,
+      peak,
+      hasPosition,
+      pnlPct,
+    };
 
     // 각 전략 투표
-    let buyWeight = 0, sellWeight = 0, totalWeight = 0;
-    const buyVoters: string[] = [], sellVoters: string[] = [];
+    let buyWeight = 0,
+      sellWeight = 0,
+      totalWeight = 0;
+    const buyVoters: string[] = [],
+      sellVoters: string[] = [];
 
     for (const name of activeStrategies) {
       const fn = signalFns[name];
@@ -1071,8 +1856,13 @@ function backtestEnsemble(prices: DailyPrice[], capital: number, params: Record<
       const w = weightsParam[name] ?? 1.0;
       totalWeight += w;
       const sig = fn(ind);
-      if (sig === 'BUY') { buyWeight += w; buyVoters.push(name); }
-      else if (sig === 'SELL') { sellWeight += w; sellVoters.push(name); }
+      if (sig === "BUY") {
+        buyWeight += w;
+        buyVoters.push(name);
+      } else if (sig === "SELL") {
+        sellWeight += w;
+        sellVoters.push(name);
+      }
     }
 
     const buyRatio = totalWeight > 0 ? buyWeight / totalWeight : 0;
@@ -1082,9 +1872,17 @@ function backtestEnsemble(prices: DailyPrice[], capital: number, params: Record<
     if (sellRatio >= sellThreshold && holdings > 0) {
       const pnl = (price - avgEntry) * holdings;
       cash += holdings * price;
-      trades.push({ date, side: 'SELL', price, quantity: holdings, pnl: +pnl.toFixed(2),
-        reason: `앙상블 매도 (${sellVoters.join('+')} ${(sellRatio * 100).toFixed(0)}%)` });
-      holdings = 0; avgEntry = 0; peak = 0;
+      trades.push({
+        date,
+        side: "SELL",
+        price,
+        quantity: holdings,
+        pnl: +pnl.toFixed(2),
+        reason: `앙상블 매도 (${sellVoters.join("+")} ${(sellRatio * 100).toFixed(0)}%)`,
+      });
+      holdings = 0;
+      avgEntry = 0;
+      peak = 0;
     }
     // BUY
     else if (buyRatio >= buyThreshold && cash > 100 && !holdings) {
@@ -1093,22 +1891,43 @@ function backtestEnsemble(prices: DailyPrice[], capital: number, params: Record<
       const amount = Math.min(cash * sizePct, cash - 100);
       if (amount > 50) {
         const qty = amount / price;
-        avgEntry = price; cash -= amount; holdings = qty; peak = price;
-        trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0,
-          reason: `앙상블 매수 (${buyVoters.join('+')} ${(buyRatio * 100).toFixed(0)}%)` });
+        avgEntry = price;
+        cash -= amount;
+        holdings = qty;
+        peak = price;
+        trades.push({
+          date,
+          side: "BUY",
+          price,
+          quantity: qty,
+          pnl: 0,
+          reason: `앙상블 매수 (${buyVoters.join("+")} ${(buyRatio * 100).toFixed(0)}%)`,
+        });
       }
     }
     // 추가 매수 (기존 포지션에 DCA처럼, 최대 노출 30%)
-    else if (buyRatio >= buyThreshold && cash > 500 && holdings > 0 && pnlPct < -0.03) {
+    else if (
+      buyRatio >= buyThreshold &&
+      cash > 500 &&
+      holdings > 0 &&
+      pnlPct < -0.03
+    ) {
       const exposure = holdings * price;
-      if (exposure < capital * 0.30) {
+      if (exposure < capital * 0.3) {
         const amount = Math.min(cash * 0.08, cash - 100);
         if (amount > 50) {
           const qty = amount / price;
           avgEntry = (avgEntry * holdings + price * qty) / (holdings + qty);
-          cash -= amount; holdings += qty;
-          trades.push({ date, side: 'BUY', price, quantity: qty, pnl: 0,
-            reason: `앙상블 물타기 (${buyVoters.join('+')} ${(buyRatio * 100).toFixed(0)}%, ${(pnlPct * 100).toFixed(1)}%)` });
+          cash -= amount;
+          holdings += qty;
+          trades.push({
+            date,
+            side: "BUY",
+            price,
+            quantity: qty,
+            pnl: 0,
+            reason: `앙상블 물타기 (${buyVoters.join("+")} ${(buyRatio * 100).toFixed(0)}%, ${(pnlPct * 100).toFixed(1)}%)`,
+          });
         }
       }
     }
@@ -1119,21 +1938,27 @@ function backtestEnsemble(prices: DailyPrice[], capital: number, params: Record<
   // 종료 시 잔여 포지션 청산
   if (holdings > 0) {
     const last = prices[prices.length - 1];
-    trades.push({ date: last.date, side: 'SELL', price: last.price, quantity: holdings,
-      pnl: +((last.price - avgEntry) * holdings).toFixed(2), reason: '종료' });
+    trades.push({
+      date: last.date,
+      side: "SELL",
+      price: last.price,
+      quantity: holdings,
+      pnl: +((last.price - avgEntry) * holdings).toFixed(2),
+      reason: "종료",
+    });
   }
   return buildResult(trades, curve, capital, prices);
 }
 
 // ============ Routes ============
 
-backtestRoutes.post('/run', async (c) => {
-  const userId = c.get('userId');
+backtestRoutes.post("/run", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json();
-  const symbol = (body.symbol as string) || 'BTCUSDT';
-  const strategy = (body.strategy as string) || 'MOMENTUM';
-  const startDate = (body.startDate as string) || '2024-10-01';
-  const endDate = (body.endDate as string) || '2025-01-20';
+  const symbol = (body.symbol as string) || "BTCUSDT";
+  const strategy = (body.strategy as string) || "MOMENTUM";
+  const startDate = (body.startDate as string) || "2024-10-01";
+  const endDate = (body.endDate as string) || "2025-01-20";
   const initialCapital = (body.initialCapital as number) || 10000;
   const params = (body.params as Record<string, unknown>) || {};
 
@@ -1142,42 +1967,98 @@ backtestRoutes.post('/run', async (c) => {
     let result: BacktestResult;
 
     switch (strategy) {
-      case 'DCA': result = backtestDCA(prices, initialCapital, params); break;
-      case 'GRID': result = backtestGrid(prices, initialCapital, params); break;
-      case 'MOMENTUM': result = backtestMomentum(prices, initialCapital, params); break;
-      case 'MEAN_REVERSION': result = backtestMeanReversion(prices, initialCapital, params); break;
-      case 'TRAILING': result = backtestTrailing(prices, initialCapital, params); break;
-      case 'MARTINGALE': result = backtestMartingale(prices, initialCapital, params); break;
-      case 'SCALPING': result = backtestScalping(prices, initialCapital, params); break;
-      case 'STAT_ARB': result = backtestStatArb(prices, initialCapital, params); break;
-      case 'FUNDING_ARB': result = backtestFundingArb(prices, initialCapital, params); break;
-      case 'RL_AGENT': result = backtestRLAgent(prices, initialCapital, params); break;
-      case 'ENSEMBLE': result = backtestEnsemble(prices, initialCapital, params); break;
-      default: result = backtestMomentum(prices, initialCapital, params);
+      case "DCA":
+        result = backtestDCA(prices, initialCapital, params);
+        break;
+      case "GRID":
+        result = backtestGrid(prices, initialCapital, params);
+        break;
+      case "MOMENTUM":
+        result = backtestMomentum(prices, initialCapital, params);
+        break;
+      case "MEAN_REVERSION":
+        result = backtestMeanReversion(prices, initialCapital, params);
+        break;
+      case "TRAILING":
+        result = backtestTrailing(prices, initialCapital, params);
+        break;
+      case "MARTINGALE":
+        result = backtestMartingale(prices, initialCapital, params);
+        break;
+      case "SCALPING":
+        result = backtestScalping(prices, initialCapital, params);
+        break;
+      case "STAT_ARB":
+        result = backtestStatArb(prices, initialCapital, params);
+        break;
+      case "FUNDING_ARB":
+        result = backtestFundingArb(prices, initialCapital, params);
+        break;
+      case "RL_AGENT":
+        result = backtestRLAgent(prices, initialCapital, params);
+        break;
+      case "ENSEMBLE":
+        result = backtestEnsemble(prices, initialCapital, params);
+        break;
+      default:
+        result = backtestMomentum(prices, initialCapital, params);
     }
 
     const id = generateId();
     await c.env.DB.prepare(
-      'INSERT INTO backtest_results (id, user_id, strategy, symbol, config, result) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(id, userId, strategy, symbol, JSON.stringify({ startDate, endDate, initialCapital, params }), JSON.stringify(result)).run();
+      "INSERT INTO backtest_results (id, user_id, strategy, symbol, config, result) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+      .bind(
+        id,
+        userId,
+        strategy,
+        symbol,
+        JSON.stringify({ startDate, endDate, initialCapital, params }),
+        JSON.stringify(result),
+      )
+      .run();
 
     return c.json({ data: result });
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : '백테스트 오류' }, 500);
+    return c.json(
+      { error: err instanceof Error ? err.message : "백테스트 오류" },
+      500,
+    );
   }
 });
 
-backtestRoutes.get('/results', async (c) => {
-  const userId = c.get('userId');
-  const limit = parseInt(c.req.query('limit') || '20');
-  const { results } = await c.env.DB.prepare('SELECT * FROM backtest_results WHERE user_id = ? ORDER BY created_at DESC LIMIT ?').bind(userId, limit).all();
+backtestRoutes.get("/results", async (c) => {
+  const userId = c.get("userId");
+  const limit = parseInt(c.req.query("limit") || "20");
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM backtest_results WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+  )
+    .bind(userId, limit)
+    .all();
 
   const backtests = (results || []).map((row) => {
     const r = row as Record<string, unknown>;
-    let result = {}, config = {};
-    try { result = JSON.parse(r.result as string); } catch { /**/ }
-    try { config = JSON.parse(r.config as string); } catch { /**/ }
-    return { id: r.id, strategy: r.strategy, symbol: r.symbol, timeframe: r.timeframe, config, result, createdAt: r.created_at };
+    let result = {},
+      config = {};
+    try {
+      result = JSON.parse(r.result as string);
+    } catch {
+      /**/
+    }
+    try {
+      config = JSON.parse(r.config as string);
+    } catch {
+      /**/
+    }
+    return {
+      id: r.id,
+      strategy: r.strategy,
+      symbol: r.symbol,
+      timeframe: r.timeframe,
+      config,
+      result,
+      createdAt: r.created_at,
+    };
   });
 
   return c.json({ data: backtests });
