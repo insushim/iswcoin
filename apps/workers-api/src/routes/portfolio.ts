@@ -1,22 +1,24 @@
-import { Hono } from 'hono';
-import type { Env, AppVariables } from '../index';
+import { Hono } from "hono";
+import type { Env, AppVariables } from "../index";
 
 type PortfolioEnv = { Bindings: Env; Variables: AppVariables };
 
 export const portfolioRoutes = new Hono<PortfolioEnv>();
 
 // GET /balance - Portfolio balance
-portfolioRoutes.get('/balance', async (c) => {
-  const userId = c.get('userId');
+portfolioRoutes.get("/balance", async (c) => {
+  const userId = c.get("userId");
 
   const portfolio = await c.env.DB.prepare(
-    'SELECT * FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1'
-  ).bind(userId).first();
+    "SELECT * FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+  )
+    .bind(userId)
+    .first();
 
   if (!portfolio) {
     return c.json({
       data: {
-        exchange: 'paper',
+        exchange: "paper",
         holdings: { USDT: { total: 10000, free: 10000, used: 0 } },
         totalValue: 10000,
         dailyPnl: 0,
@@ -27,9 +29,13 @@ portfolioRoutes.get('/balance', async (c) => {
   const p = portfolio as Record<string, unknown>;
   return c.json({
     data: {
-      exchange: 'paper',
+      exchange: "paper",
       holdings: {
-        USDT: { total: p.total_value as number, free: p.total_value as number, used: 0 },
+        USDT: {
+          total: p.total_value as number,
+          free: p.total_value as number,
+          used: 0,
+        },
       },
       totalValue: p.total_value as number,
       dailyPnl: p.daily_pnl as number,
@@ -38,40 +44,64 @@ portfolioRoutes.get('/balance', async (c) => {
 });
 
 // GET /summary - Portfolio summary matching frontend PortfolioSummary type
-portfolioRoutes.get('/summary', async (c) => {
-  const userId = c.get('userId');
+portfolioRoutes.get("/summary", async (c) => {
+  const userId = c.get("userId");
 
   const [tradesResult, botsResult, portfolio] = await Promise.all([
     c.env.DB.prepare(
-      'SELECT pnl, pnl_percent, symbol, side, entry_price, exit_price, quantity, closed_at FROM trades WHERE user_id = ? AND status = ? ORDER BY closed_at DESC LIMIT 100'
-    ).bind(userId, 'CLOSED').all(),
+      "SELECT pnl, pnl_percent, symbol, side, entry_price, exit_price, quantity, closed_at FROM trades WHERE user_id = ? AND status = ? ORDER BY closed_at DESC LIMIT 100",
+    )
+      .bind(userId, "CLOSED")
+      .all(),
     c.env.DB.prepare(
-      'SELECT COUNT(*) as count FROM bots WHERE user_id = ? AND status = ?'
-    ).bind(userId, 'RUNNING').first<{ count: number }>(),
+      "SELECT COUNT(*) as count FROM bots WHERE user_id = ? AND status = ?",
+    )
+      .bind(userId, "RUNNING")
+      .first<{ count: number }>(),
     c.env.DB.prepare(
-      'SELECT total_value, daily_pnl, positions FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1'
-    ).bind(userId).first(),
+      "SELECT total_value, daily_pnl, positions FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+    )
+      .bind(userId)
+      .first(),
   ]);
 
   const trades = (tradesResult.results || []) as Record<string, unknown>[];
-  const totalPnl = trades.reduce((sum: number, t) => sum + ((t.pnl as number) || 0), 0);
+  const totalPnl = trades.reduce(
+    (sum: number, t) => sum + ((t.pnl as number) || 0),
+    0,
+  );
   const winning = trades.filter((t) => ((t.pnl as number) || 0) > 0);
 
   const p = portfolio as Record<string, unknown> | null;
   const totalValue = (p?.total_value as number) || 10000;
   const dailyPnl = (p?.daily_pnl as number) || 0;
   const initialCapital = 10000;
-  const totalPnlPercent = initialCapital > 0 ? parseFloat(((totalPnl / initialCapital) * 100).toFixed(2)) : 0;
-  const dailyPnlPercent = totalValue > 0 ? parseFloat(((dailyPnl / totalValue) * 100).toFixed(2)) : 0;
+  const totalPnlPercent =
+    initialCapital > 0
+      ? parseFloat(((totalPnl / initialCapital) * 100).toFixed(2))
+      : 0;
+  // dailyPnLPercent: 일일 손익 / (총자산 - 일일 손익) = 전일 대비 변화율
+  const prevValue = totalValue - dailyPnl;
+  const dailyPnlPercent =
+    prevValue > 0 ? parseFloat(((dailyPnl / prevValue) * 100).toFixed(2)) : 0;
 
   // Parse positions from portfolio
-  let positions: Array<{ symbol: string; amount: number; entryPrice: number; currentPrice: number; pnl: number; pnlPercent: number }> = [];
+  let positions: Array<{
+    symbol: string;
+    amount: number;
+    entryPrice: number;
+    currentPrice: number;
+    pnl: number;
+    pnlPercent: number;
+  }> = [];
   try {
     const raw = p?.positions as string;
     if (raw) {
       positions = JSON.parse(raw);
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   return c.json({
     data: {
@@ -81,7 +111,10 @@ portfolioRoutes.get('/summary', async (c) => {
       dailyPnL: dailyPnl,
       dailyPnLPercent: dailyPnlPercent,
       activeBots: botsResult?.count || 0,
-      winRate: trades.length > 0 ? parseFloat((winning.length / trades.length * 100).toFixed(2)) : 0,
+      winRate:
+        trades.length > 0
+          ? parseFloat(((winning.length / trades.length) * 100).toFixed(2))
+          : 0,
       totalTrades: trades.length,
       positions,
     },
@@ -89,28 +122,35 @@ portfolioRoutes.get('/summary', async (c) => {
 });
 
 // GET /history - Portfolio value history (실제 거래 기반)
-portfolioRoutes.get('/history', async (c) => {
-  const userId = c.get('userId');
-  const days = parseInt(c.req.query('days') || '30');
+portfolioRoutes.get("/history", async (c) => {
+  const userId = c.get("userId");
+  const days = parseInt(c.req.query("days") || "30");
 
   // Get current portfolio value
   const portfolio = await c.env.DB.prepare(
-    'SELECT total_value FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1'
-  ).bind(userId).first<{ total_value: number }>();
+    "SELECT total_value FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+  )
+    .bind(userId)
+    .first<{ total_value: number }>();
   const currentValue = portfolio?.total_value || 10000;
 
   // Fetch actual trades to build real portfolio history
   const cutoff = new Date(Date.now() - days * 86400000).toISOString();
   const tradesResult = await c.env.DB.prepare(
-    `SELECT pnl, closed_at FROM trades WHERE user_id = ? AND status = 'CLOSED' AND closed_at >= ? ORDER BY closed_at ASC`
-  ).bind(userId, cutoff).all();
+    `SELECT pnl, closed_at FROM trades WHERE user_id = ? AND status = 'CLOSED' AND closed_at >= ? ORDER BY closed_at ASC`,
+  )
+    .bind(userId, cutoff)
+    .all();
 
-  const trades = (tradesResult.results || []) as Array<{ pnl: number; closed_at: string }>;
+  const trades = (tradesResult.results || []) as Array<{
+    pnl: number;
+    closed_at: string;
+  }>;
 
   // Group trades by date and calculate daily PnL
   const dailyPnl = new Map<string, number>();
   for (const t of trades) {
-    const date = t.closed_at.split('T')[0];
+    const date = t.closed_at.split("T")[0];
     dailyPnl.set(date, (dailyPnl.get(date) || 0) + (t.pnl || 0));
   }
 
@@ -124,7 +164,7 @@ portfolioRoutes.get('/history', async (c) => {
 
   for (let i = days; i >= 0; i--) {
     const date = new Date(now.getTime() - i * 86400000);
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = date.toISOString().split("T")[0];
     const dayPnl = dailyPnl.get(dateStr) || 0;
     runningValue += dayPnl;
 
@@ -144,25 +184,29 @@ portfolioRoutes.get('/history', async (c) => {
 });
 
 // GET /positions - Portfolio positions
-portfolioRoutes.get('/positions', async (c) => {
-  const userId = c.get('userId');
+portfolioRoutes.get("/positions", async (c) => {
+  const userId = c.get("userId");
 
   const portfolio = await c.env.DB.prepare(
-    'SELECT positions FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1'
-  ).bind(userId).first<{ positions: string }>();
+    "SELECT positions FROM portfolios WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+  )
+    .bind(userId)
+    .first<{ positions: string }>();
 
   let positions: unknown[] = [];
   try {
     if (portfolio?.positions) {
       positions = JSON.parse(portfolio.positions);
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   // If no positions exist, return default positions with USDT only
   if (positions.length === 0) {
     positions = [
       {
-        symbol: 'USDT',
+        symbol: "USDT",
         amount: 10000,
         entryPrice: 1,
         currentPrice: 1,

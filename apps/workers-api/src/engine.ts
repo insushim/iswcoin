@@ -240,6 +240,7 @@ function updatePositions(
 async function savePortfolio(
   db: D1Database,
   id: string,
+  userId: string,
   positions: Position[],
   prices: Record<string, number>,
 ) {
@@ -258,13 +259,31 @@ async function savePortfolio(
   let tv = 0;
   for (const p of positions)
     tv += p.symbol === "USDT" ? p.amount : p.amount * p.currentPrice;
+
+  // 오늘의 실현 손익 (closed trades only) + 미실현 손익 변화
+  const todayStart = new Date().toISOString().split("T")[0] + "T00:00:00.000Z";
+  const todayPnlRow = await db
+    .prepare(
+      "SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE user_id = ? AND status = 'CLOSED' AND closed_at >= ?",
+    )
+    .bind(userId, todayStart)
+    .first<{ total: number }>();
+  const realizedDailyPnl = todayPnlRow?.total || 0;
+
+  // 미실현 손익 (현재 보유 포지션의 pnl 합계)
+  const unrealizedPnl = positions
+    .filter((p) => p.symbol !== "USDT")
+    .reduce((sum, p) => sum + (p.pnl || 0), 0);
+
+  const dailyPnl = +(realizedDailyPnl + unrealizedPnl).toFixed(2);
+
   await db
     .prepare(
       "UPDATE portfolios SET total_value = ?, daily_pnl = ?, positions = ?, updated_at = ? WHERE id = ?",
     )
     .bind(
       +tv.toFixed(2),
-      +(tv - 10000).toFixed(2),
+      dailyPnl,
       JSON.stringify(positions),
       new Date().toISOString(),
       id,
@@ -1511,7 +1530,7 @@ export async function runPaperTrading(env: Env): Promise<string[]> {
       }
     }
 
-    await savePortfolio(db, portfolio.id, portfolio.positions, prices);
+    await savePortfolio(db, portfolio.id, userId, portfolio.positions, prices);
   }
 
   log(`엔진 실행 완료 (${new Date().toISOString()})`);

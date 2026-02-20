@@ -1684,88 +1684,119 @@ function backtestEnsemble(
     pnlPct: number;
   }) => Signal;
 
+  // 모든 전략 공통: 하락장 보호 로직
+  // 포지션 보유 시 손절/추세전환 매도를 모든 전략에서 일관되게 적용
+  const commonSell = (ind: Parameters<SignalFn>[0]): Signal | null => {
+    if (!ind.hasPosition) return null;
+    // 공통 손절: -5% 이하 → 강제 매도 (모든 전략 동의)
+    if (ind.pnlPct <= -0.05) return "SELL";
+    // 추세 하락 + 손실: 빠른 탈출
+    if (ind.pnlPct <= -0.02 && ind.trend <= -0.5) return "SELL";
+    // MACD 데드크로스 + EMA 역배열 + 손실: 추세 전환 매도
+    if (ind.ema9 < ind.ema21 && ind.macd.hist < 0 && ind.pnlPct < -0.01)
+      return "SELL";
+    return null;
+  };
+
   const signalFns: Record<string, SignalFn> = {
     DCA: (ind) => {
-      // DCA는 꾸준히 매수하는 전략 - 가장 관대한 BUY 조건
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && ind.rsi > 70 && ind.pnlPct > 0.01) return "SELL";
       if (ind.hasPosition && ind.pnlPct >= 0.05) return "SELL";
-      if (ind.hasPosition && ind.pnlPct <= -0.08) return "SELL";
-      if (ind.rsi < 55) return "BUY"; // 중립 이하면 매수 (적립식)
+      // DCA는 꾸준히 매수 - 하락추세 심하면 자제
+      if (ind.trend <= -0.5) return "HOLD";
+      if (ind.rsi < 50) return "BUY";
       return "HOLD";
     },
     GRID: (ind) => {
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && ind.price > ind.bb.u * 0.98 && ind.pnlPct > 0)
         return "SELL";
       if (ind.hasPosition && ind.rsi > 65) return "SELL";
-      if (ind.price < ind.bb.m && ind.rsi < 50) return "BUY"; // BB 중간선 아래 + RSI 50 미만
+      if (ind.price < ind.bb.m && ind.rsi < 48 && ind.trend > -0.5)
+        return "BUY";
       return "HOLD";
     },
     MOMENTUM: (ind) => {
-      if (
-        ind.hasPosition &&
-        ind.ema9 < ind.ema21 &&
-        ind.macd.hist < 0 &&
-        ind.rsi > 50
-      )
+      const cs = commonSell(ind);
+      if (cs) return cs;
+      if (ind.hasPosition && ind.ema9 < ind.ema21 && ind.macd.hist < 0)
         return "SELL";
       if (ind.hasPosition && ind.pnlPct >= 0.06) return "SELL";
-      // MACD 양수이거나 EMA 골든크로스면 매수
-      if (ind.macd.hist > 0 && (ind.ema9 > ind.ema21 || ind.trend > -0.2))
+      // 상승 추세 확인 후 매수
+      if (
+        ind.macd.hist > 0 &&
+        ind.ema9 > ind.ema21 &&
+        ind.trend > 0 &&
+        ind.rsi < 60
+      )
         return "BUY";
-      if (ind.ema9 > ind.ema21 && ind.rsi < 60) return "BUY";
+      if (ind.ema9 > ind.ema21 && ind.rsi < 55 && ind.trend >= 0) return "BUY";
       return "HOLD";
     },
     MEAN_REVERSION: (ind) => {
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && (ind.rsi > 62 || ind.zScore > 0.8)) return "SELL";
       if (ind.hasPosition && ind.pnlPct >= 0.04) return "SELL";
-      // RSI 과매도 또는 BB 하단 접근 시 매수
-      if (ind.rsi < 42 && ind.zScore < -0.5) return "BUY";
-      if (ind.rsi < 35) return "BUY"; // 극단적 과매도는 무조건
-      if (ind.price < ind.bb.l * 1.02 && ind.rsi < 45) return "BUY";
+      // 과매도 매수 - 추세 확인
+      if (ind.rsi < 30 && ind.zScore < -1.0) return "BUY"; // 극단적 과매도
+      if (ind.rsi < 40 && ind.zScore < -0.5 && ind.trend > -0.5) return "BUY";
+      if (ind.price < ind.bb.l * 1.01 && ind.rsi < 38) return "BUY";
       return "HOLD";
     },
     TRAILING: (ind) => {
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && ind.price < ind.peak - ind.atr * 1.5)
         return "SELL";
       if (ind.hasPosition && ind.pnlPct >= 0.05) return "SELL";
-      // 추세 양수이거나 MACD 반전 시 매수
-      if (ind.trend > 0 && ind.rsi < 58) return "BUY";
-      if (ind.macd.hist > 0 && ind.trend > -0.3 && ind.rsi < 50) return "BUY";
+      // 상승 추세에서만 매수
+      if (ind.trend > 0.2 && ind.rsi < 55) return "BUY";
+      if (ind.macd.hist > 0 && ind.trend > 0 && ind.rsi < 50) return "BUY";
       return "HOLD";
     },
     MARTINGALE: (ind) => {
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && ind.pnlPct > 0.025) return "SELL";
       if (ind.hasPosition && ind.rsi > 65) return "SELL";
-      if (ind.rsi < 42 && ind.trend > -0.8) return "BUY";
-      if (ind.rsi < 35) return "BUY"; // 급락 시 적극 매수
+      if (ind.rsi < 35 && ind.trend > -0.5) return "BUY";
       return "HOLD";
     },
     SCALPING: (ind) => {
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && (ind.rsi > 60 || ind.pnlPct > 0.02)) return "SELL";
-      // BB 중간선 아래 + EMA 근접 시 매수
-      if (ind.rsi < 42 && ind.price < ind.bb.m) return "BUY";
-      if (ind.rsi < 38 && ind.ema9 > ind.ema21 * 0.995) return "BUY";
+      if (ind.rsi < 38 && ind.price < ind.bb.m && ind.trend > -0.3)
+        return "BUY";
       return "HOLD";
     },
     STAT_ARB: (ind) => {
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && ind.zScore > 0.5) return "SELL";
       if (ind.hasPosition && ind.pnlPct >= 0.03) return "SELL";
-      // zScore 낮으면 평균 회귀 기대
-      if (ind.zScore < -1.0 && ind.rsi < 50) return "BUY";
-      if (ind.zScore < -0.8 && ind.rsi < 40) return "BUY";
+      if (ind.zScore < -1.2 && ind.rsi < 45) return "BUY";
+      if (ind.zScore < -0.8 && ind.rsi < 38 && ind.trend > -0.5) return "BUY";
       return "HOLD";
     },
     FUNDING_ARB: (ind) => {
+      const cs = commonSell(ind);
+      if (cs) return cs;
       if (ind.hasPosition && ind.pnlPct > 0.015) return "SELL";
       if (ind.hasPosition && ind.rsi > 65) return "SELL";
-      if (ind.rsi < 48 && ind.zScore < -0.3) return "BUY";
+      if (ind.rsi < 45 && ind.zScore < -0.3 && ind.trend > -0.3) return "BUY";
       return "HOLD";
     },
     RL_AGENT: (ind) => {
-      // 복합 지표 점수 기반 결정
+      const cs = commonSell(ind);
+      if (cs) return cs;
       let score = 0;
       if (ind.rsi < 35) score += 2;
-      else if (ind.rsi < 48) score += 1;
+      else if (ind.rsi < 45) score += 1;
       if (ind.rsi > 65) score -= 2;
       else if (ind.rsi > 55) score -= 1;
       if (ind.macd.hist > 0) score += 1;
@@ -1778,8 +1809,8 @@ function backtestEnsemble(
       else score -= 1;
       if (ind.hasPosition && score <= -2) return "SELL";
       if (ind.hasPosition && ind.pnlPct > 0.03) return "SELL";
-      if (score >= 2) return "BUY"; // 2점 이상이면 매수 (was 3)
-      if (ind.hasPosition && score <= -1 && ind.pnlPct < -0.03) return "SELL";
+      if (score >= 3) return "BUY";
+      if (ind.hasPosition && score <= -1 && ind.pnlPct < -0.02) return "SELL";
       return "HOLD";
     },
   };

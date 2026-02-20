@@ -58,18 +58,18 @@ const ENSEMBLE_PRESETS: Record<
   }
 > = {
   stable: {
-    label: "안정형 (횡보장 최적)",
+    label: "안정형 (하락장 방어)",
     strategies: ["DCA", "MEAN_REVERSION", "GRID", "TRAILING"],
     weights: { DCA: 1.0, MEAN_REVERSION: 1.5, GRID: 1.2, TRAILING: 1.3 },
-    buyThreshold: 0.4,
-    sellThreshold: -0.4,
+    buyThreshold: 0.5,
+    sellThreshold: -0.25,
   },
   aggressive: {
     label: "공격형 (추세장 최적)",
     strategies: ["DCA", "MOMENTUM", "SCALPING", "TRAILING"],
     weights: { DCA: 0.6, MOMENTUM: 2.0, SCALPING: 1.2, TRAILING: 1.5 },
     buyThreshold: 0.25,
-    sellThreshold: -0.25,
+    sellThreshold: -0.2,
   },
   balanced: {
     label: "균형형 (전천후)",
@@ -82,7 +82,7 @@ const ENSEMBLE_PRESETS: Record<
       TRAILING: 1.2,
     },
     buyThreshold: 0.35,
-    sellThreshold: -0.35,
+    sellThreshold: -0.25,
   },
   ai: {
     label: "AI형 (데이터 기반)",
@@ -101,7 +101,7 @@ const ENSEMBLE_PRESETS: Record<
       FUNDING_ARB: 0.8,
     },
     buyThreshold: 0.35,
-    sellThreshold: -0.35,
+    sellThreshold: -0.25,
   },
 };
 
