@@ -108,8 +108,8 @@ export class EnsembleStrategy extends BaseStrategy {
 
   getDefaultConfig(): Record<string, number> {
     return {
-      buyThreshold: 0.5,
-      sellThreshold: -0.5,
+      buyThreshold: 0.3,
+      sellThreshold: -0.3,
     };
   }
 

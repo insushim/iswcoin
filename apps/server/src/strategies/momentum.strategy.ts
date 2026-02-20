@@ -175,10 +175,10 @@ export class MomentumStrategy extends BaseStrategy {
       }
     }
 
-    if (buyScore >= 25) {
+    if (buyScore >= 20) {
       return {
         action: "buy",
-        confidence: Math.min(buyScore / 100, 0.95),
+        confidence: Math.min(buyScore / 70, 0.95),
         reason: `Momentum BUY: ${buyReasons.join(", ")}`,
         price: currentPrice,
         stopLoss: currentPrice * (1 - stopLossPct / 100),
@@ -192,10 +192,10 @@ export class MomentumStrategy extends BaseStrategy {
       };
     }
 
-    if (sellScore >= 25) {
+    if (sellScore >= 20) {
       return {
         action: "sell",
-        confidence: Math.min(sellScore / 100, 0.95),
+        confidence: Math.min(sellScore / 70, 0.95),
         reason: `Momentum SELL: ${sellReasons.join(", ")}`,
         price: currentPrice,
         metadata: {

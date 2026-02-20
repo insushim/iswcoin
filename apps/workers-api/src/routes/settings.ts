@@ -1,6 +1,11 @@
-import { Hono } from 'hono';
-import type { Env, AppVariables } from '../index';
-import { generateId, hashPassword, verifyPassword, encryptApiKey } from '../utils';
+import { Hono } from "hono";
+import type { Env, AppVariables } from "../index";
+import {
+  generateId,
+  hashPassword,
+  verifyPassword,
+  encryptApiKey,
+} from "../utils";
 
 type SettingsEnv = { Bindings: Env; Variables: AppVariables };
 
@@ -9,20 +14,22 @@ export const settingsRoutes = new Hono<SettingsEnv>();
 // ==================== API Keys ====================
 
 // GET /api-keys - List user's API keys (masked secret)
-settingsRoutes.get('/api-keys', async (c) => {
-  const userId = c.get('userId');
+settingsRoutes.get("/api-keys", async (c) => {
+  const userId = c.get("userId");
 
   const { results } = await c.env.DB.prepare(
-    'SELECT id, exchange, api_key, label, is_active, created_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC'
-  ).bind(userId).all();
+    "SELECT id, exchange, api_key, label, is_active, created_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
+  )
+    .bind(userId)
+    .all();
 
   const keys = (results || []).map((row) => {
     const r = row as Record<string, unknown>;
     return {
       id: r.id as string,
       exchange: r.exchange as string,
-      label: r.label as string || '',
-      keyPreview: '••••••••', // 암호화된 값이므로 미리보기 불가
+      label: (r.label as string) || "",
+      keyPreview: "••••••••", // 암호화된 값이므로 미리보기 불가
       isActive: !!(r.is_active as number),
       createdAt: r.created_at as string,
     };
@@ -32,8 +39,8 @@ settingsRoutes.get('/api-keys', async (c) => {
 });
 
 // POST /api-keys - Add new API key
-settingsRoutes.post('/api-keys', async (c) => {
-  const userId = c.get('userId');
+settingsRoutes.post("/api-keys", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json();
 
   const exchange = body.exchange as string;
@@ -43,33 +50,49 @@ settingsRoutes.post('/api-keys', async (c) => {
   const label = body.label as string | undefined;
 
   if (!exchange || !apiKey || !secretKey) {
-    return c.json({ error: 'Exchange, API key, and secret key are required' }, 400);
+    return c.json(
+      { error: "Exchange, API key, and secret key are required" },
+      400,
+    );
   }
 
   const id = generateId();
   const encryptionSecret = c.env.ENCRYPTION_SECRET;
   if (!encryptionSecret) {
-    return c.json({ error: 'Server encryption not configured. Contact administrator.' }, 500);
+    return c.json(
+      { error: "Server encryption not configured. Contact administrator." },
+      500,
+    );
   }
   const encryptedApiKey = await encryptApiKey(apiKey, encryptionSecret);
   const encryptedSecretKey = await encryptApiKey(secretKey, encryptionSecret);
-  const encryptedPassphrase = passphrase ? await encryptApiKey(passphrase, encryptionSecret) : null;
+  const encryptedPassphrase = passphrase
+    ? await encryptApiKey(passphrase, encryptionSecret)
+    : null;
 
   await c.env.DB.prepare(
-    'INSERT INTO api_keys (id, user_id, exchange, api_key, secret_key, passphrase, label) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(
-    id, userId, exchange, encryptedApiKey, encryptedSecretKey,
-    encryptedPassphrase, label || null
-  ).run();
+    "INSERT INTO api_keys (id, user_id, exchange, api_key, secret_key, passphrase, label) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  )
+    .bind(
+      id,
+      userId,
+      exchange,
+      encryptedApiKey,
+      encryptedSecretKey,
+      encryptedPassphrase,
+      label || null,
+    )
+    .run();
 
   return c.json({
     data: {
       id,
       exchange,
-      label: label || '',
-      keyPreview: apiKey.length > 8
-        ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`
-        : '****',
+      label: label || "",
+      keyPreview:
+        apiKey.length > 8
+          ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`
+          : "****",
       isActive: true,
       createdAt: new Date().toISOString(),
     },
@@ -77,19 +100,21 @@ settingsRoutes.post('/api-keys', async (c) => {
 });
 
 // DELETE /api-keys/:id - Remove API key
-settingsRoutes.delete('/api-keys/:id', async (c) => {
-  const userId = c.get('userId');
-  const id = c.req.param('id');
+settingsRoutes.delete("/api-keys/:id", async (c) => {
+  const userId = c.get("userId");
+  const id = c.req.param("id");
 
   const existing = await c.env.DB.prepare(
-    'SELECT id FROM api_keys WHERE id = ? AND user_id = ?'
-  ).bind(id, userId).first();
+    "SELECT id FROM api_keys WHERE id = ? AND user_id = ?",
+  )
+    .bind(id, userId)
+    .first();
 
-  if (!existing) return c.json({ error: 'API key not found' }, 404);
+  if (!existing) return c.json({ error: "API key not found" }, 404);
 
-  await c.env.DB.prepare(
-    'DELETE FROM api_keys WHERE id = ? AND user_id = ?'
-  ).bind(id, userId).run();
+  await c.env.DB.prepare("DELETE FROM api_keys WHERE id = ? AND user_id = ?")
+    .bind(id, userId)
+    .run();
 
   return c.json({ data: { success: true } });
 });
@@ -97,19 +122,21 @@ settingsRoutes.delete('/api-keys/:id', async (c) => {
 // ==================== Notifications ====================
 
 // GET /notifications - Get notification settings
-settingsRoutes.get('/notifications', async (c) => {
-  const userId = c.get('userId');
+settingsRoutes.get("/notifications", async (c) => {
+  const userId = c.get("userId");
 
   const settings = await c.env.DB.prepare(
-    'SELECT * FROM notification_settings WHERE user_id = ?'
-  ).bind(userId).first();
+    "SELECT * FROM notification_settings WHERE user_id = ?",
+  )
+    .bind(userId)
+    .first();
 
   if (!settings) {
     // Return defaults
     return c.json({
       data: {
         telegramEnabled: false,
-        telegramChatId: '',
+        telegramChatId: "",
         notifyTrades: true,
         notifyAlerts: true,
         notifyDailyReport: true,
@@ -122,7 +149,7 @@ settingsRoutes.get('/notifications', async (c) => {
   return c.json({
     data: {
       telegramEnabled: !!(s.telegram_enabled as number),
-      telegramChatId: (s.telegram_chat_id as string) || '',
+      telegramChatId: (s.telegram_chat_id as string) || "",
       notifyTrades: !!(s.notify_trades as number),
       notifyAlerts: !!(s.notify_alerts as number),
       notifyDailyReport: !!(s.notify_daily_report as number),
@@ -132,13 +159,13 @@ settingsRoutes.get('/notifications', async (c) => {
 });
 
 // PUT /notifications - Update notification settings
-settingsRoutes.put('/notifications', async (c) => {
-  const userId = c.get('userId');
+settingsRoutes.put("/notifications", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json();
 
   const {
     telegramEnabled = false,
-    telegramChatId = '',
+    telegramChatId = "",
     notifyTrades = true,
     notifyAlerts = true,
     notifyDailyReport = true,
@@ -147,35 +174,42 @@ settingsRoutes.put('/notifications', async (c) => {
 
   // Upsert notification settings
   const existing = await c.env.DB.prepare(
-    'SELECT id FROM notification_settings WHERE user_id = ?'
-  ).bind(userId).first();
+    "SELECT id FROM notification_settings WHERE user_id = ?",
+  )
+    .bind(userId)
+    .first();
 
   if (existing) {
     await c.env.DB.prepare(
-      'UPDATE notification_settings SET telegram_enabled = ?, telegram_chat_id = ?, notify_trades = ?, notify_alerts = ?, notify_daily_report = ?, notify_regime_change = ?, updated_at = ? WHERE user_id = ?'
-    ).bind(
-      telegramEnabled ? 1 : 0,
-      telegramChatId,
-      notifyTrades ? 1 : 0,
-      notifyAlerts ? 1 : 0,
-      notifyDailyReport ? 1 : 0,
-      notifyRegimeChange ? 1 : 0,
-      new Date().toISOString(),
-      userId
-    ).run();
+      "UPDATE notification_settings SET telegram_enabled = ?, telegram_chat_id = ?, notify_trades = ?, notify_alerts = ?, notify_daily_report = ?, notify_regime_change = ?, updated_at = ? WHERE user_id = ?",
+    )
+      .bind(
+        telegramEnabled ? 1 : 0,
+        telegramChatId,
+        notifyTrades ? 1 : 0,
+        notifyAlerts ? 1 : 0,
+        notifyDailyReport ? 1 : 0,
+        notifyRegimeChange ? 1 : 0,
+        new Date().toISOString(),
+        userId,
+      )
+      .run();
   } else {
     const id = generateId();
     await c.env.DB.prepare(
-      'INSERT INTO notification_settings (id, user_id, telegram_enabled, telegram_chat_id, notify_trades, notify_alerts, notify_daily_report, notify_regime_change) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(
-      id, userId,
-      telegramEnabled ? 1 : 0,
-      telegramChatId,
-      notifyTrades ? 1 : 0,
-      notifyAlerts ? 1 : 0,
-      notifyDailyReport ? 1 : 0,
-      notifyRegimeChange ? 1 : 0
-    ).run();
+      "INSERT INTO notification_settings (id, user_id, telegram_enabled, telegram_chat_id, notify_trades, notify_alerts, notify_daily_report, notify_regime_change) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+      .bind(
+        id,
+        userId,
+        telegramEnabled ? 1 : 0,
+        telegramChatId,
+        notifyTrades ? 1 : 0,
+        notifyAlerts ? 1 : 0,
+        notifyDailyReport ? 1 : 0,
+        notifyRegimeChange ? 1 : 0,
+      )
+      .run();
   }
 
   return c.json({
@@ -193,8 +227,8 @@ settingsRoutes.put('/notifications', async (c) => {
 // ==================== Profile ====================
 
 // PUT /profile - Update user profile
-settingsRoutes.put('/profile', async (c) => {
-  const userId = c.get('userId');
+settingsRoutes.put("/profile", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json();
 
   // 허용 필드 화이트리스트 (동적 SQL 대신 명시적 분기)
@@ -202,76 +236,146 @@ settingsRoutes.put('/profile', async (c) => {
   const email = body.email !== undefined ? String(body.email) : undefined;
 
   if (name !== undefined && name.length > 50) {
-    return c.json({ error: 'Name must be 50 characters or less' }, 400);
+    return c.json({ error: "Name must be 50 characters or less" }, 400);
   }
   if (email !== undefined) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) return c.json({ error: 'Invalid email format' }, 400);
+    if (!emailRegex.test(email))
+      return c.json({ error: "Invalid email format" }, 400);
     const existingEmail = await c.env.DB.prepare(
-      'SELECT id FROM users WHERE email = ? AND id != ?'
-    ).bind(email, userId).first();
-    if (existingEmail) return c.json({ error: 'Email already in use' }, 409);
+      "SELECT id FROM users WHERE email = ? AND id != ?",
+    )
+      .bind(email, userId)
+      .first();
+    if (existingEmail) return c.json({ error: "Email already in use" }, 409);
   }
 
   if (name === undefined && email === undefined) {
-    return c.json({ error: 'No fields to update' }, 400);
+    return c.json({ error: "No fields to update" }, 400);
   }
 
   const now = new Date().toISOString();
   if (name !== undefined && email !== undefined) {
     await c.env.DB.prepare(
-      'UPDATE users SET name = ?, email = ?, updated_at = ? WHERE id = ?'
-    ).bind(name, email, now, userId).run();
+      "UPDATE users SET name = ?, email = ?, updated_at = ? WHERE id = ?",
+    )
+      .bind(name, email, now, userId)
+      .run();
   } else if (name !== undefined) {
     await c.env.DB.prepare(
-      'UPDATE users SET name = ?, updated_at = ? WHERE id = ?'
-    ).bind(name, now, userId).run();
+      "UPDATE users SET name = ?, updated_at = ? WHERE id = ?",
+    )
+      .bind(name, now, userId)
+      .run();
   } else {
     await c.env.DB.prepare(
-      'UPDATE users SET email = ?, updated_at = ? WHERE id = ?'
-    ).bind(email!, now, userId).run();
+      "UPDATE users SET email = ?, updated_at = ? WHERE id = ?",
+    )
+      .bind(email!, now, userId)
+      .run();
   }
 
   const user = await c.env.DB.prepare(
-    'SELECT id, email, name, created_at FROM users WHERE id = ?'
-  ).bind(userId).first();
+    "SELECT id, email, name, created_at FROM users WHERE id = ?",
+  )
+    .bind(userId)
+    .first();
 
   return c.json({ data: user });
 });
 
+// ==================== Alerts ====================
+
+// GET /alerts - List user's alerts
+settingsRoutes.get("/alerts", async (c) => {
+  const userId = c.get("userId");
+  const limit = Math.min(Number(c.req.query("limit")) || 30, 100);
+
+  const { results } = await c.env.DB.prepare(
+    "SELECT id, type, severity, message, is_read, created_at FROM alerts WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+  )
+    .bind(userId, limit)
+    .all();
+
+  const countRow = await c.env.DB.prepare(
+    "SELECT COUNT(*) as cnt FROM alerts WHERE user_id = ? AND is_read = 0",
+  )
+    .bind(userId)
+    .first<{ cnt: number }>();
+
+  const alerts = (results || []).map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      id: r.id as string,
+      type: r.type as string,
+      severity: r.severity as string,
+      message: r.message as string,
+      isRead: !!(r.is_read as number),
+      createdAt: r.created_at as string,
+    };
+  });
+
+  return c.json({ data: alerts, unreadCount: countRow?.cnt ?? 0 });
+});
+
+// POST /alerts/read - Mark all alerts as read
+settingsRoutes.post("/alerts/read", async (c) => {
+  const userId = c.get("userId");
+
+  await c.env.DB.prepare(
+    "UPDATE alerts SET is_read = 1 WHERE user_id = ? AND is_read = 0",
+  )
+    .bind(userId)
+    .run();
+
+  return c.json({ data: { success: true } });
+});
+
 // PUT /password - Change password
-settingsRoutes.put('/password', async (c) => {
-  const userId = c.get('userId');
+settingsRoutes.put("/password", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json();
 
   const currentPassword = body.currentPassword as string;
   const newPassword = body.newPassword as string;
   if (!currentPassword || !newPassword) {
-    return c.json({ error: 'Current password and new password are required' }, 400);
+    return c.json(
+      { error: "Current password and new password are required" },
+      400,
+    );
   }
 
   if (newPassword.length < 8) {
-    return c.json({ error: 'New password must be at least 8 characters' }, 400);
+    return c.json({ error: "New password must be at least 8 characters" }, 400);
   }
-  if (!/[A-Z]/.test(newPassword)) return c.json({ error: '대문자를 1개 이상 포함해야 합니다' }, 400);
-  if (!/[a-z]/.test(newPassword)) return c.json({ error: '소문자를 1개 이상 포함해야 합니다' }, 400);
-  if (!/[0-9]/.test(newPassword)) return c.json({ error: '숫자를 1개 이상 포함해야 합니다' }, 400);
+  if (!/[A-Z]/.test(newPassword))
+    return c.json({ error: "대문자를 1개 이상 포함해야 합니다" }, 400);
+  if (!/[a-z]/.test(newPassword))
+    return c.json({ error: "소문자를 1개 이상 포함해야 합니다" }, 400);
+  if (!/[0-9]/.test(newPassword))
+    return c.json({ error: "숫자를 1개 이상 포함해야 합니다" }, 400);
 
   // Verify current password
   const user = await c.env.DB.prepare(
-    'SELECT password_hash FROM users WHERE id = ?'
-  ).bind(userId).first<{ password_hash: string }>();
+    "SELECT password_hash FROM users WHERE id = ?",
+  )
+    .bind(userId)
+    .first<{ password_hash: string }>();
 
-  if (!user) return c.json({ error: 'User not found' }, 404);
+  if (!user) return c.json({ error: "User not found" }, 404);
 
   const valid = await verifyPassword(currentPassword, user.password_hash);
-  if (!valid) return c.json({ error: 'Current password is incorrect' }, 401);
+  if (!valid) return c.json({ error: "Current password is incorrect" }, 401);
 
   // Hash and update new password
   const newHash = await hashPassword(newPassword);
   await c.env.DB.prepare(
-    'UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?'
-  ).bind(newHash, new Date().toISOString(), userId).run();
+    "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+  )
+    .bind(newHash, new Date().toISOString(), userId)
+    .run();
 
-  return c.json({ data: { success: true, message: 'Password updated successfully' } });
+  return c.json({
+    data: { success: true, message: "Password updated successfully" },
+  });
 });

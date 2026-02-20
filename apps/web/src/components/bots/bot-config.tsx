@@ -35,117 +35,365 @@ const ENSEMBLE_SUB_STRATEGIES = [
 
 // 전략별 기본 가중치 (전략 특성에 맞게 차별화)
 const STRATEGY_DEFAULT_WEIGHTS: Record<string, number> = {
-  DCA: 0.8,            // 항상 매수 경향 → 낮은 가중치
-  GRID: 0.9,           // 횡보장 수익 → 보통
-  MARTINGALE: 0.6,     // 고위험 → 낮은 가중치
-  TRAILING: 1.2,       // 수익 보호 → 높은 가중치
-  MOMENTUM: 1.5,       // 추세 추종 핵심 → 높은 가중치
+  DCA: 0.8, // 항상 매수 경향 → 낮은 가중치
+  GRID: 0.9, // 횡보장 수익 → 보통
+  MARTINGALE: 0.6, // 고위험 → 낮은 가중치
+  TRAILING: 1.2, // 수익 보호 → 높은 가중치
+  MOMENTUM: 1.5, // 추세 추종 핵심 → 높은 가중치
   MEAN_REVERSION: 1.3, // 통계적 신뢰도 높음
-  RL_AGENT: 1.0,       // AI 신호 → 중립
-  STAT_ARB: 1.5,       // 통계적 신뢰도 최고
-  SCALPING: 1.0,       // 단기 변동 → 중립
-  FUNDING_ARB: 0.8,    // 보조 신호 → 낮은 가중치
+  RL_AGENT: 1.0, // AI 신호 → 중립
+  STAT_ARB: 1.5, // 통계적 신뢰도 최고
+  SCALPING: 1.0, // 단기 변동 → 중립
+  FUNDING_ARB: 0.8, // 보조 신호 → 낮은 가중치
 };
 
-const ENSEMBLE_PRESETS: Record<string, { label: string; strategies: string[]; weights: Record<string, number>; buyThreshold: number; sellThreshold: number }> = {
+const ENSEMBLE_PRESETS: Record<
+  string,
+  {
+    label: string;
+    strategies: string[];
+    weights: Record<string, number>;
+    buyThreshold: number;
+    sellThreshold: number;
+  }
+> = {
   stable: {
     label: "안정형 (횡보장 최적)",
     strategies: ["DCA", "MEAN_REVERSION", "GRID", "TRAILING"],
     weights: { DCA: 1.0, MEAN_REVERSION: 1.5, GRID: 1.2, TRAILING: 1.3 },
-    buyThreshold: 0.6, sellThreshold: -0.6,
+    buyThreshold: 0.4,
+    sellThreshold: -0.4,
   },
   aggressive: {
     label: "공격형 (추세장 최적)",
     strategies: ["DCA", "MOMENTUM", "SCALPING", "TRAILING"],
     weights: { DCA: 0.6, MOMENTUM: 2.0, SCALPING: 1.2, TRAILING: 1.5 },
-    buyThreshold: 0.5, sellThreshold: -0.5,
+    buyThreshold: 0.25,
+    sellThreshold: -0.25,
   },
   balanced: {
     label: "균형형 (전천후)",
     strategies: ["DCA", "MOMENTUM", "MEAN_REVERSION", "STAT_ARB", "TRAILING"],
-    weights: { DCA: 0.7, MOMENTUM: 1.5, MEAN_REVERSION: 1.3, STAT_ARB: 1.5, TRAILING: 1.2 },
-    buyThreshold: 0.6, sellThreshold: -0.6,
+    weights: {
+      DCA: 0.7,
+      MOMENTUM: 1.5,
+      MEAN_REVERSION: 1.3,
+      STAT_ARB: 1.5,
+      TRAILING: 1.2,
+    },
+    buyThreshold: 0.35,
+    sellThreshold: -0.35,
   },
   ai: {
     label: "AI형 (데이터 기반)",
-    strategies: ["DCA", "RL_AGENT", "STAT_ARB", "MEAN_REVERSION", "FUNDING_ARB"],
-    weights: { DCA: 0.6, RL_AGENT: 1.8, STAT_ARB: 1.5, MEAN_REVERSION: 1.2, FUNDING_ARB: 0.8 },
-    buyThreshold: 0.5, sellThreshold: -0.5,
+    strategies: [
+      "DCA",
+      "RL_AGENT",
+      "STAT_ARB",
+      "MEAN_REVERSION",
+      "FUNDING_ARB",
+    ],
+    weights: {
+      DCA: 0.6,
+      RL_AGENT: 1.8,
+      STAT_ARB: 1.5,
+      MEAN_REVERSION: 1.2,
+      FUNDING_ARB: 0.8,
+    },
+    buyThreshold: 0.35,
+    sellThreshold: -0.35,
   },
 };
 
 const STRATEGY_CONFIGS: Record<StrategyType, ConfigField[]> = {
   [StrategyType.DCA]: [
-    { key: "investmentAmount", label: "투자 금액 ($)", type: "number", defaultValue: 100, helperText: "DCA 회당 매수 금액" },
-    { key: "interval", label: "매수 간격 (시간)", type: "number", defaultValue: 24, helperText: "매수 사이 대기 시간" },
-    { key: "maxPositions", label: "최대 포지션", type: "number", defaultValue: 10 },
-    { key: "priceDropTrigger", label: "하락 매수 트리거 (%)", type: "number", defaultValue: 5, helperText: "급락 시 추가 매수" },
+    {
+      key: "investmentAmount",
+      label: "투자 금액 ($)",
+      type: "number",
+      defaultValue: 100,
+      helperText: "DCA 회당 매수 금액",
+    },
+    {
+      key: "interval",
+      label: "매수 간격 (시간)",
+      type: "number",
+      defaultValue: 24,
+      helperText: "매수 사이 대기 시간",
+    },
+    {
+      key: "maxPositions",
+      label: "최대 포지션",
+      type: "number",
+      defaultValue: 10,
+    },
+    {
+      key: "priceDropTrigger",
+      label: "하락 매수 트리거 (%)",
+      type: "number",
+      defaultValue: 5,
+      helperText: "급락 시 추가 매수",
+    },
   ],
   [StrategyType.GRID]: [
-    { key: "upperPrice", label: "상한가 ($)", type: "number", defaultValue: 50000 },
-    { key: "lowerPrice", label: "하한가 ($)", type: "number", defaultValue: 30000 },
-    { key: "gridLevels", label: "그리드 단계", type: "number", defaultValue: 20 },
-    { key: "amountPerGrid", label: "그리드당 금액 ($)", type: "number", defaultValue: 50 },
+    {
+      key: "upperPrice",
+      label: "상한가 ($)",
+      type: "number",
+      defaultValue: 50000,
+    },
+    {
+      key: "lowerPrice",
+      label: "하한가 ($)",
+      type: "number",
+      defaultValue: 30000,
+    },
+    {
+      key: "gridLevels",
+      label: "그리드 단계",
+      type: "number",
+      defaultValue: 20,
+    },
+    {
+      key: "amountPerGrid",
+      label: "그리드당 금액 ($)",
+      type: "number",
+      defaultValue: 50,
+    },
   ],
   [StrategyType.MARTINGALE]: [
-    { key: "initialAmount", label: "초기 금액 ($)", type: "number", defaultValue: 100 },
+    {
+      key: "initialAmount",
+      label: "초기 금액 ($)",
+      type: "number",
+      defaultValue: 100,
+    },
     { key: "multiplier", label: "배율", type: "number", defaultValue: 2 },
     { key: "maxSteps", label: "최대 단계", type: "number", defaultValue: 5 },
     { key: "takeProfit", label: "익절 (%)", type: "number", defaultValue: 2 },
   ],
   [StrategyType.TRAILING]: [
-    { key: "trailPercent", label: "추적 비율 (%)", type: "number", defaultValue: 1.5 },
-    { key: "activationPercent", label: "활성화 (%)", type: "number", defaultValue: 2, helperText: "추적 시작 최소 수익률" },
-    { key: "positionSize", label: "포지션 크기 ($)", type: "number", defaultValue: 500 },
+    {
+      key: "trailPercent",
+      label: "추적 비율 (%)",
+      type: "number",
+      defaultValue: 1.5,
+    },
+    {
+      key: "activationPercent",
+      label: "활성화 (%)",
+      type: "number",
+      defaultValue: 2,
+      helperText: "추적 시작 최소 수익률",
+    },
+    {
+      key: "positionSize",
+      label: "포지션 크기 ($)",
+      type: "number",
+      defaultValue: 500,
+    },
   ],
   [StrategyType.MOMENTUM]: [
     { key: "rsiPeriod", label: "RSI 기간", type: "number", defaultValue: 14 },
-    { key: "rsiBuyThreshold", label: "RSI 매수 기준", type: "number", defaultValue: 30 },
-    { key: "rsiSellThreshold", label: "RSI 매도 기준", type: "number", defaultValue: 70 },
-    { key: "positionSize", label: "포지션 크기 ($)", type: "number", defaultValue: 500 },
+    {
+      key: "rsiBuyThreshold",
+      label: "RSI 매수 기준",
+      type: "number",
+      defaultValue: 30,
+    },
+    {
+      key: "rsiSellThreshold",
+      label: "RSI 매도 기준",
+      type: "number",
+      defaultValue: 70,
+    },
+    {
+      key: "positionSize",
+      label: "포지션 크기 ($)",
+      type: "number",
+      defaultValue: 500,
+    },
     { key: "stopLoss", label: "손절 (%)", type: "number", defaultValue: 3 },
   ],
   [StrategyType.MEAN_REVERSION]: [
-    { key: "bollingerPeriod", label: "볼린저 기간", type: "number", defaultValue: 20 },
-    { key: "bollingerStdDev", label: "볼린저 표준편차", type: "number", defaultValue: 2 },
-    { key: "positionSize", label: "포지션 크기 ($)", type: "number", defaultValue: 500 },
+    {
+      key: "bollingerPeriod",
+      label: "볼린저 기간",
+      type: "number",
+      defaultValue: 20,
+    },
+    {
+      key: "bollingerStdDev",
+      label: "볼린저 표준편차",
+      type: "number",
+      defaultValue: 2,
+    },
+    {
+      key: "positionSize",
+      label: "포지션 크기 ($)",
+      type: "number",
+      defaultValue: 500,
+    },
     { key: "stopLoss", label: "손절 (%)", type: "number", defaultValue: 2 },
   ],
   [StrategyType.RL_AGENT]: [
-    { key: "modelPath", label: "모델 경로", type: "text", defaultValue: "models/rl_agent_v1" },
-    { key: "positionSize", label: "포지션 크기 ($)", type: "number", defaultValue: 500 },
-    { key: "confidenceThreshold", label: "신뢰도 임계값", type: "number", defaultValue: 0.7 },
-    { key: "maxPositions", label: "최대 포지션", type: "number", defaultValue: 3 },
+    {
+      key: "modelPath",
+      label: "모델 경로",
+      type: "text",
+      defaultValue: "models/rl_agent_v1",
+    },
+    {
+      key: "positionSize",
+      label: "포지션 크기 ($)",
+      type: "number",
+      defaultValue: 500,
+    },
+    {
+      key: "confidenceThreshold",
+      label: "신뢰도 임계값",
+      type: "number",
+      defaultValue: 0.7,
+    },
+    {
+      key: "maxPositions",
+      label: "최대 포지션",
+      type: "number",
+      defaultValue: 3,
+    },
   ],
   [StrategyType.STAT_ARB]: [
-    { key: "lookbackPeriod", label: "분석 기간 (봉)", type: "number", defaultValue: 60 },
-    { key: "zScoreEntry", label: "Z-Score 진입", type: "number", defaultValue: 2.0, helperText: "스프레드 진입 기준 Z값" },
-    { key: "zScoreExit", label: "Z-Score 청산", type: "number", defaultValue: 0.5, helperText: "스프레드 청산 기준 Z값" },
-    { key: "zScoreStopLoss", label: "Z-Score 손절", type: "number", defaultValue: 3.5 },
-    { key: "halfLife", label: "반감기 (봉)", type: "number", defaultValue: 15, helperText: "평균 회귀 예상 속도" },
-    { key: "positionSize", label: "포지션 크기 ($)", type: "number", defaultValue: 500 },
+    {
+      key: "lookbackPeriod",
+      label: "분석 기간 (봉)",
+      type: "number",
+      defaultValue: 60,
+    },
+    {
+      key: "zScoreEntry",
+      label: "Z-Score 진입",
+      type: "number",
+      defaultValue: 2.0,
+      helperText: "스프레드 진입 기준 Z값",
+    },
+    {
+      key: "zScoreExit",
+      label: "Z-Score 청산",
+      type: "number",
+      defaultValue: 0.5,
+      helperText: "스프레드 청산 기준 Z값",
+    },
+    {
+      key: "zScoreStopLoss",
+      label: "Z-Score 손절",
+      type: "number",
+      defaultValue: 3.5,
+    },
+    {
+      key: "halfLife",
+      label: "반감기 (봉)",
+      type: "number",
+      defaultValue: 15,
+      helperText: "평균 회귀 예상 속도",
+    },
+    {
+      key: "positionSize",
+      label: "포지션 크기 ($)",
+      type: "number",
+      defaultValue: 500,
+    },
   ],
   [StrategyType.SCALPING]: [
     { key: "emaFast", label: "EMA 빠른선", type: "number", defaultValue: 5 },
     { key: "emaSlow", label: "EMA 느린선", type: "number", defaultValue: 13 },
     { key: "rsiPeriod", label: "RSI 기간", type: "number", defaultValue: 7 },
     { key: "bbPeriod", label: "볼린저 기간", type: "number", defaultValue: 15 },
-    { key: "atrTpMultiplier", label: "ATR 익절 배수", type: "number", defaultValue: 1.5, helperText: "ATR × 이 값 = 익절 거리" },
-    { key: "atrSlMultiplier", label: "ATR 손절 배수", type: "number", defaultValue: 1.0, helperText: "ATR × 이 값 = 손절 거리" },
-    { key: "volumeSpikeRatio", label: "거래량 급등 배율", type: "number", defaultValue: 2.0 },
-    { key: "positionSize", label: "포지션 크기 ($)", type: "number", defaultValue: 300 },
+    {
+      key: "atrTpMultiplier",
+      label: "ATR 익절 배수",
+      type: "number",
+      defaultValue: 1.5,
+      helperText: "ATR × 이 값 = 익절 거리",
+    },
+    {
+      key: "atrSlMultiplier",
+      label: "ATR 손절 배수",
+      type: "number",
+      defaultValue: 1.0,
+      helperText: "ATR × 이 값 = 손절 거리",
+    },
+    {
+      key: "volumeSpikeRatio",
+      label: "거래량 급등 배율",
+      type: "number",
+      defaultValue: 2.0,
+    },
+    {
+      key: "positionSize",
+      label: "포지션 크기 ($)",
+      type: "number",
+      defaultValue: 300,
+    },
   ],
   [StrategyType.FUNDING_ARB]: [
-    { key: "minAnnualizedRate", label: "최소 연환산 수익률 (%)", type: "number", defaultValue: 15, helperText: "이 수익률 이상일 때 진입" },
-    { key: "maxAnnualizedRate", label: "최대 연환산 (%)", type: "number", defaultValue: 200, helperText: "과도한 펀딩비 회피" },
-    { key: "positionSize", label: "포지션 크기 ($)", type: "number", defaultValue: 500 },
-    { key: "stopLossPercent", label: "손절 (%)", type: "number", defaultValue: 2 },
-    { key: "maxHoldingHours", label: "최대 보유 시간", type: "number", defaultValue: 72, helperText: "시간 단위" },
-    { key: "minFundingCycles", label: "최소 펀딩 횟수", type: "number", defaultValue: 3, helperText: "최소 수취 주기 (8h × N)" },
+    {
+      key: "minAnnualizedRate",
+      label: "최소 연환산 수익률 (%)",
+      type: "number",
+      defaultValue: 15,
+      helperText: "이 수익률 이상일 때 진입",
+    },
+    {
+      key: "maxAnnualizedRate",
+      label: "최대 연환산 (%)",
+      type: "number",
+      defaultValue: 200,
+      helperText: "과도한 펀딩비 회피",
+    },
+    {
+      key: "positionSize",
+      label: "포지션 크기 ($)",
+      type: "number",
+      defaultValue: 500,
+    },
+    {
+      key: "stopLossPercent",
+      label: "손절 (%)",
+      type: "number",
+      defaultValue: 2,
+    },
+    {
+      key: "maxHoldingHours",
+      label: "최대 보유 시간",
+      type: "number",
+      defaultValue: 72,
+      helperText: "시간 단위",
+    },
+    {
+      key: "minFundingCycles",
+      label: "최소 펀딩 횟수",
+      type: "number",
+      defaultValue: 3,
+      helperText: "최소 수취 주기 (8h × N)",
+    },
   ],
   [StrategyType.ENSEMBLE]: [
-    { key: "buyThreshold", label: "매수 임계값", type: "number", defaultValue: 0.7, helperText: "가중 투표 합산이 이 값 이상이면 매수 (낮을수록 공격적, 권장: 0.5~1.0)" },
-    { key: "sellThreshold", label: "매도 임계값", type: "number", defaultValue: -0.7, helperText: "가중 투표 합산이 이 값 이하이면 매도 (0에 가까울수록 공격적, 권장: -0.5~-1.0)" },
+    {
+      key: "buyThreshold",
+      label: "매수 임계값",
+      type: "number",
+      defaultValue: 0.35,
+      helperText:
+        "가중 투표 합산이 이 값 이상이면 매수 (낮을수록 공격적, 권장: 0.2~0.5)",
+    },
+    {
+      key: "sellThreshold",
+      label: "매도 임계값",
+      type: "number",
+      defaultValue: -0.35,
+      helperText:
+        "가중 투표 합산이 이 값 이하이면 매도 (0에 가까울수록 공격적, 권장: -0.2~-0.5)",
+    },
   ],
 };
 
@@ -173,10 +421,18 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
     if (current.includes(strat)) {
       const next = current.filter((s) => s !== strat);
       const { [strat]: _, ...restWeights } = weights;
-      onChange({ ...config, strategies: next as never, weights: restWeights as never });
+      onChange({
+        ...config,
+        strategies: next as never,
+        weights: restWeights as never,
+      });
     } else {
       const defaultWeight = STRATEGY_DEFAULT_WEIGHTS[strat] ?? 1.0;
-      onChange({ ...config, strategies: [...current, strat] as never, weights: { ...weights, [strat]: defaultWeight } as never });
+      onChange({
+        ...config,
+        strategies: [...current, strat] as never,
+        weights: { ...weights, [strat]: defaultWeight } as never,
+      });
     }
     setSelectedPreset("");
   };
@@ -212,7 +468,9 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
 
         {/* 프리셋 */}
         <div className="space-y-2">
-          <label className="block text-xs font-medium text-slate-400">추천 조합 (프리셋)</label>
+          <label className="block text-xs font-medium text-slate-400">
+            추천 조합 (프리셋)
+          </label>
           <div className="flex flex-wrap gap-2">
             {Object.entries(ENSEMBLE_PRESETS).map(([key, preset]) => (
               <button
@@ -233,7 +491,9 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
 
         {/* 서브 전략 선택 */}
         <div className="space-y-2">
-          <label className="block text-xs font-medium text-slate-400">전략 선택 (2개 이상)</label>
+          <label className="block text-xs font-medium text-slate-400">
+            전략 선택 (2개 이상)
+          </label>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {ENSEMBLE_SUB_STRATEGIES.map((s) => {
               const isSelected = selectedStrategies.includes(s.value);
@@ -248,36 +508,49 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
                       : "border-slate-700 text-slate-400 hover:border-slate-600 hover:text-slate-300"
                   }`}
                 >
-                  {isSelected ? "✓ " : ""}{s.label}
+                  {isSelected ? "✓ " : ""}
+                  {s.label}
                 </button>
               );
             })}
           </div>
           {selectedStrategies.length > 0 && selectedStrategies.length < 2 && (
-            <p className="text-xs text-amber-400">최소 2개 전략을 선택해주세요</p>
+            <p className="text-xs text-amber-400">
+              최소 2개 전략을 선택해주세요
+            </p>
           )}
         </div>
 
         {/* 가중치 슬라이더 */}
         {selectedStrategies.length >= 2 && (
           <div className="space-y-3">
-            <label className="block text-xs font-medium text-slate-400">전략별 가중치</label>
+            <label className="block text-xs font-medium text-slate-400">
+              전략별 가중치
+            </label>
             {selectedStrategies.map((strat) => {
-              const label = ENSEMBLE_SUB_STRATEGIES.find((s) => s.value === strat)?.label || strat;
+              const label =
+                ENSEMBLE_SUB_STRATEGIES.find((s) => s.value === strat)?.label ||
+                strat;
               const w = weights[strat] ?? 1.0;
               return (
                 <div key={strat} className="flex items-center gap-3">
-                  <span className="w-28 text-xs text-slate-300 truncate">{label}</span>
+                  <span className="w-28 text-xs text-slate-300 truncate">
+                    {label}
+                  </span>
                   <input
                     type="range"
                     min="0"
                     max="2"
                     step="0.1"
                     value={w}
-                    onChange={(e) => changeWeight(strat, parseFloat(e.target.value))}
+                    onChange={(e) =>
+                      changeWeight(strat, parseFloat(e.target.value))
+                    }
                     className="flex-1 accent-emerald-500"
                   />
-                  <span className="w-10 text-right text-xs font-mono text-slate-400">{w.toFixed(1)}</span>
+                  <span className="w-10 text-right text-xs font-mono text-slate-400">
+                    {w.toFixed(1)}
+                  </span>
                 </div>
               );
             })}
@@ -294,7 +567,9 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
               helperText={field.helperText}
               value={String(config[field.key] ?? field.defaultValue)}
               step="any"
-              onChange={(e) => handleFieldChange(field.key, e.target.value, field.type)}
+              onChange={(e) =>
+                handleFieldChange(field.key, e.target.value, field.type)
+              }
             />
           ))}
         </div>
@@ -304,9 +579,7 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
 
   return (
     <div className="space-y-4">
-      <h4 className="text-sm font-medium text-slate-300">
-        전략 파라미터 설정
-      </h4>
+      <h4 className="text-sm font-medium text-slate-300">전략 파라미터 설정</h4>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {fields.map((field) => (
           <Input
@@ -328,7 +601,9 @@ export function BotConfig({ strategy, config, onChange }: BotConfigProps) {
   );
 }
 
-export function getDefaultConfig(strategy: StrategyType): Record<string, number | string | boolean> {
+export function getDefaultConfig(
+  strategy: StrategyType,
+): Record<string, number | string | boolean> {
   const fields = STRATEGY_CONFIGS[strategy] || [];
   const config: Record<string, number | string | boolean> = {};
   fields.forEach((f) => {

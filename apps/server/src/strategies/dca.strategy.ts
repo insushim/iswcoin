@@ -174,7 +174,7 @@ export class DCAStrategy extends BaseStrategy {
     if (isScheduledBuy) {
       return {
         action: "buy",
-        confidence: 0.5,
+        confidence: 0.65,
         reason: `DCA scheduled buy at interval of ${intervalCandles} candles`,
         price: currentCandle.close,
         stopLoss: currentCandle.close * 0.95,

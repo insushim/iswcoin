@@ -71,7 +71,7 @@ export interface TradeSignalInput {
 
 // 매직 넘버 상수화
 export const MAX_PAPER_LOGS = 1000;
-export const MIN_CONFIDENCE_THRESHOLD = 0.15;
+export const MIN_CONFIDENCE_THRESHOLD = 0.1;
 export const MIN_ORDER_VALUE_USDT = 10;
 export const PAPER_SAVE_INTERVAL = 10; // 매 N회 루프마다 Paper 상태 저장
 export const RECONCILE_INTERVAL = 10; // 매 N회 루프마다 포지션 대사 (REAL만)

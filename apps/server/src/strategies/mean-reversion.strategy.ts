@@ -1,10 +1,10 @@
-import { BaseStrategy, type TradeSignal } from './base.strategy.js';
-import type { OHLCVData } from '../services/indicators.service.js';
-import { indicatorsService } from '../services/indicators.service.js';
+import { BaseStrategy, type TradeSignal } from "./base.strategy.js";
+import type { OHLCVData } from "../services/indicators.service.js";
+import { indicatorsService } from "../services/indicators.service.js";
 
 export class MeanReversionStrategy extends BaseStrategy {
   constructor(config?: Record<string, number>) {
-    super('MEAN_REVERSION', config);
+    super("MEAN_REVERSION", config);
   }
 
   getDefaultConfig(): Record<string, number> {
@@ -21,19 +21,23 @@ export class MeanReversionStrategy extends BaseStrategy {
     };
   }
 
-  analyze(data: OHLCVData[], config?: Record<string, number>): TradeSignal | null {
+  analyze(
+    data: OHLCVData[],
+    config?: Record<string, number>,
+  ): TradeSignal | null {
     const cfg = config ?? this.config;
-    const bbPeriod = cfg['bbPeriod'] ?? 20;
-    const bbStdDev = cfg['bbStdDev'] ?? 2;
-    const rsiPeriod = cfg['rsiPeriod'] ?? 14;
-    const rsiOversold = cfg['rsiOversold'] ?? 30;
-    const rsiOverbought = cfg['rsiOverbought'] ?? 70;
-    const smaPeriod = cfg['smaPeriod'] ?? 50;
-    const stopLossPct = cfg['stopLossPct'] ?? 2.5;
-    const takeProfitPct = cfg['takeProfitPct'] ?? 4;
-    const confirmationCandles = cfg['confirmationCandles'] ?? 2;
+    const bbPeriod = cfg["bbPeriod"] ?? 20;
+    const bbStdDev = cfg["bbStdDev"] ?? 2;
+    const rsiPeriod = cfg["rsiPeriod"] ?? 14;
+    const rsiOversold = cfg["rsiOversold"] ?? 30;
+    const rsiOverbought = cfg["rsiOverbought"] ?? 70;
+    const smaPeriod = cfg["smaPeriod"] ?? 50;
+    const stopLossPct = cfg["stopLossPct"] ?? 2.5;
+    const takeProfitPct = cfg["takeProfitPct"] ?? 4;
+    const confirmationCandles = cfg["confirmationCandles"] ?? 2;
 
-    const minRequired = Math.max(bbPeriod, rsiPeriod, smaPeriod) + confirmationCandles + 2;
+    const minRequired =
+      Math.max(bbPeriod, rsiPeriod, smaPeriod) + confirmationCandles + 2;
     if (data.length < minRequired) {
       return null;
     }
@@ -42,11 +46,19 @@ export class MeanReversionStrategy extends BaseStrategy {
     const currentCandle = data[data.length - 1]!;
     const currentPrice = currentCandle.close;
 
-    const bbValues = indicatorsService.calculateBollingerBands(closes, bbPeriod, bbStdDev);
+    const bbValues = indicatorsService.calculateBollingerBands(
+      closes,
+      bbPeriod,
+      bbStdDev,
+    );
     const rsiValues = indicatorsService.calculateRSI(closes, rsiPeriod);
     const smaValues = indicatorsService.calculateSMA(closes, smaPeriod);
 
-    if (bbValues.length < confirmationCandles + 1 || rsiValues.length < 2 || smaValues.length < 1) {
+    if (
+      bbValues.length < confirmationCandles + 1 ||
+      rsiValues.length < 2 ||
+      smaValues.length < 1
+    ) {
       return null;
     }
 
@@ -55,9 +67,10 @@ export class MeanReversionStrategy extends BaseStrategy {
     const prevRSI = rsiValues[rsiValues.length - 2]!;
     const currentSMA = smaValues[smaValues.length - 1]!;
 
-    const pctB = currentBB.upper !== currentBB.lower
-      ? (currentPrice - currentBB.lower) / (currentBB.upper - currentBB.lower)
-      : 0.5;
+    const pctB =
+      currentBB.upper !== currentBB.lower
+        ? (currentPrice - currentBB.lower) / (currentBB.upper - currentBB.lower)
+        : 0.5;
 
     const touchedLowerBand = currentPrice <= currentBB.lower * 1.015;
     const touchedUpperBand = currentPrice >= currentBB.upper * 0.985;
@@ -97,18 +110,26 @@ export class MeanReversionStrategy extends BaseStrategy {
     const belowSMA = currentPrice < currentSMA;
 
     // RSI가 중립이지만 BB 하단 터치하고 RSI가 하락 후 반등 시작한 경우도 허용
-    const rsiModerateUp = currentRSI < 45 && currentRSI > prevRSI;
+    const rsiModerateUp = currentRSI < 55 && currentRSI > prevRSI;
 
-    if ((touchedLowerBand || lowerBandBounce) && (rsiReversingUp || rsiModerateUp)) {
-      const confidence = this.calculateConfidence(pctB, currentRSI, 'buy', nearSMA);
+    if (
+      (touchedLowerBand || lowerBandBounce) &&
+      (rsiReversingUp || rsiModerateUp)
+    ) {
+      const confidence = this.calculateConfidence(
+        pctB,
+        currentRSI,
+        "buy",
+        nearSMA,
+      );
       const targetPrice = currentBB.middle;
       const effectiveTP = Math.max(
         currentPrice * (1 + takeProfitPct / 100),
-        targetPrice
+        targetPrice,
       );
 
       return {
-        action: 'buy',
+        action: "buy",
         confidence,
         reason: `Mean reversion BUY: BB lower band bounce (pctB=${pctB.toFixed(3)}), RSI reversing from ${currentRSI.toFixed(1)}`,
         price: currentPrice,
@@ -124,13 +145,21 @@ export class MeanReversionStrategy extends BaseStrategy {
       };
     }
 
-    const rsiModerateDown = currentRSI > 55 && currentRSI < prevRSI;
+    const rsiModerateDown = currentRSI > 45 && currentRSI < prevRSI;
 
-    if ((touchedUpperBand || upperBandBounce) && (rsiReversingDown || rsiModerateDown)) {
-      const confidence = this.calculateConfidence(1 - pctB, 100 - currentRSI, 'sell', nearSMA);
+    if (
+      (touchedUpperBand || upperBandBounce) &&
+      (rsiReversingDown || rsiModerateDown)
+    ) {
+      const confidence = this.calculateConfidence(
+        1 - pctB,
+        100 - currentRSI,
+        "sell",
+        nearSMA,
+      );
 
       return {
-        action: 'sell',
+        action: "sell",
         confidence,
         reason: `Mean reversion SELL: BB upper band rejection (pctB=${pctB.toFixed(3)}), RSI reversing from ${currentRSI.toFixed(1)}`,
         price: currentPrice,
@@ -150,12 +179,12 @@ export class MeanReversionStrategy extends BaseStrategy {
   private calculateConfidence(
     bandDistance: number,
     rsi: number,
-    side: 'buy' | 'sell',
-    nearSMA: boolean
+    side: "buy" | "sell",
+    nearSMA: boolean,
   ): number {
     let score = 0.4;
 
-    if (side === 'buy') {
+    if (side === "buy") {
       if (bandDistance < 0) score += 0.2;
       if (rsi < 25) score += 0.15;
       else if (rsi < 30) score += 0.1;
