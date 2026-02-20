@@ -69,11 +69,13 @@ async function fetchCurrentPrices(
     const symbolSet = new Set(symbols);
     for (const item of data.result.list) {
       if (symbolSet.has(item.symbol)) {
-        prices[item.symbol] = parseFloat(item.lastPrice);
+        const p = parseFloat(item.lastPrice);
+        // NaN/0/음수 가격 방지 (CRITICAL-4)
+        if (!isNaN(p) && p > 0) prices[item.symbol] = p;
       }
     }
   } catch (err) {
-    console.log(`[Engine] Bybit ticker 실패: ${err}`);
+    console.error(`[Engine] Bybit ticker 실패: ${err}`);
     // 개별 심볼 폴백
     for (const s of symbols) {
       if (prices[s]) continue;
@@ -87,7 +89,8 @@ async function fetchCurrentPrices(
             result: { list: Array<{ symbol: string; lastPrice: string }> };
           };
           if (d.retCode === 0 && d.result.list.length > 0) {
-            prices[s] = parseFloat(d.result.list[0].lastPrice);
+            const p = parseFloat(d.result.list[0].lastPrice);
+            if (!isNaN(p) && p > 0) prices[s] = p;
           }
         }
       } catch {
@@ -113,7 +116,10 @@ async function fetchHistory(symbol: string): Promise<number[]> {
     };
     if (data.retCode !== 0 || !Array.isArray(data.result?.list)) return [];
     // list: [[startTime, open, high, low, close, volume, turnover], ...] (newest first)
-    return data.result.list.reverse().map((k) => parseFloat(k[4])); // close prices, oldest first
+    return data.result.list
+      .reverse()
+      .map((k) => parseFloat(k[4]))
+      .filter((v) => !isNaN(v) && v > 0); // NaN/0 가격 필터링 (CRITICAL-4)
   } catch {
     return [];
   }
@@ -189,25 +195,42 @@ function updatePositions(
   price: number,
   cost: number,
 ): Position[] {
+  // NaN/무효 값 방지 (CRITICAL-4, CRITICAL-5)
+  if (
+    !isFinite(qty) ||
+    qty <= 0 ||
+    !isFinite(price) ||
+    price <= 0 ||
+    !isFinite(cost) ||
+    cost < 0
+  ) {
+    return positions;
+  }
   const up = [...positions];
   const ui = up.findIndex((p) => p.symbol === "USDT");
-  if (ui >= 0)
-    up[ui] = {
-      ...up[ui],
-      amount: up[ui].amount + (side === "BUY" ? -cost : cost),
-    };
+  if (side === "BUY" && ui >= 0) {
+    // USDT 잔고 음수 방지 (HIGH-1)
+    const newAmount = up[ui].amount - cost;
+    if (newAmount < 0) return positions; // 잔고 부족 → 거래 거부
+    up[ui] = { ...up[ui], amount: newAmount };
+  } else if (side === "SELL" && ui >= 0) {
+    up[ui] = { ...up[ui], amount: up[ui].amount + cost };
+  }
   const ai = up.findIndex((p) => p.symbol === base);
   if (side === "BUY") {
     if (ai >= 0) {
       const tot = up[ai].amount + qty;
-      const avg = (up[ai].entryPrice * up[ai].amount + price * qty) / tot;
+      const avg =
+        tot > 0
+          ? (up[ai].entryPrice * up[ai].amount + price * qty) / tot
+          : price;
       up[ai] = {
         symbol: base,
         amount: tot,
         entryPrice: +avg.toFixed(2),
         currentPrice: price,
         pnl: +((price - avg) * tot).toFixed(2),
-        pnlPercent: +(((price - avg) / avg) * 100).toFixed(2),
+        pnlPercent: avg > 0 ? +(((price - avg) / avg) * 100).toFixed(2) : 0,
       };
     } else {
       up.push({
@@ -220,19 +243,20 @@ function updatePositions(
       });
     }
   } else if (ai >= 0) {
-    const rem = up[ai].amount - qty;
+    // Overselling 방지: 보유량 이상 매도 불가 (CRITICAL-3)
+    const actualQty = Math.min(qty, up[ai].amount);
+    const rem = up[ai].amount - actualQty;
     if (rem <= 0.000001) up.splice(ai, 1);
-    else
+    else {
+      const ep = up[ai].entryPrice;
       up[ai] = {
         ...up[ai],
         amount: rem,
         currentPrice: price,
-        pnl: +((price - up[ai].entryPrice) * rem).toFixed(2),
-        pnlPercent: +(
-          ((price - up[ai].entryPrice) / up[ai].entryPrice) *
-          100
-        ).toFixed(2),
+        pnl: ep > 0 ? +((price - ep) * rem).toFixed(2) : 0,
+        pnlPercent: ep > 0 ? +(((price - ep) / ep) * 100).toFixed(2) : 0,
       };
+    }
   }
   return up;
 }
@@ -475,6 +499,8 @@ function strategyGrid(
   if (price > upper || price < lower) return { signal: null, newState: state };
 
   const step = (upper - lower) / gridLevels;
+  // step=0 방지: upper==lower일 때 NaN/Infinity 방지 (MEDIUM-2)
+  if (step <= 0) return { signal: null, newState: state };
   const curLevel = Math.floor((price - lower) / step);
   const lastLevel = Number(state.lastGridLevel ?? -1);
   const cooldown = Number(state.gridCooldown || 0);
@@ -1190,8 +1216,26 @@ function strategyEnsemble(
   config: Record<string, unknown>,
   state: Record<string, unknown>,
 ): { signal: TradeSignal | null; newState: Record<string, unknown> } {
-  const strategies = (config.strategies as string[]) || [];
-  const weights = (config.weights as Record<string, number>) || {};
+  // strategies 파싱: 배열 또는 쉼표 구분 문자열 지원 (HIGH-2)
+  let strategies: string[] = [];
+  if (Array.isArray(config.strategies)) {
+    strategies = config.strategies as string[];
+  } else if (typeof config.strategies === "string") {
+    strategies = (config.strategies as string)
+      .split(",")
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+  }
+  // weights 파싱: weights 키 또는 개별 전략명 키에서 추출
+  let weights: Record<string, number> = {};
+  if (config.weights && typeof config.weights === "object") {
+    weights = config.weights as Record<string, number>;
+  } else {
+    // 개별 키에서 전략 가중치 추출 (폴백)
+    for (const s of strategies) {
+      if (typeof config[s] === "number") weights[s] = config[s] as number;
+    }
+  }
   const buyThreshold = Number(config.buyThreshold || 0.5);
   const sellThreshold = Number(config.sellThreshold || -0.5);
 
@@ -1351,188 +1395,260 @@ export async function runPaperTrading(env: Env): Promise<string[]> {
   const logs: string[] = [];
   const log = (msg: string) => {
     logs.push(msg);
-    console.log(msg);
   };
   const db = env.DB;
 
-  // 1. Get running bots
-  const { results } = await db
-    .prepare(
-      "SELECT id, user_id, name, strategy, symbol, config, status FROM bots WHERE status = 'RUNNING'",
-    )
-    .all();
-  const bots = (results || []) as unknown as BotRow[];
-  if (!bots.length) {
-    log("실행 중인 봇 없음");
-    return logs;
-  }
-  log(`${bots.length}개 봇 처리 시작`);
-
-  // 2. Collect unique symbols
-  const symbols = [...new Set(bots.map((b) => b.symbol.replace("/", "")))];
-
-  // 3. Fetch current prices (Bybit API)
-  const prices = await fetchCurrentPrices(symbols);
-  log(
-    `가격: ${Object.entries(prices)
-      .map(([s, p]) => `${s}=$${p.toFixed(2)}`)
-      .join(", ")}`,
-  );
-
-  // 4. Fetch history & calculate indicators per symbol (Bybit v5)
-  const indicatorMap: Record<string, Indicators> = {};
-  const historyPromises = symbols.map(async (sym) => {
-    const history = await fetchHistory(sym);
-    indicatorMap[sym] = calcIndicators(history, prices[sym] || 0);
-    log(
-      `${sym}: RSI=${indicatorMap[sym].rsi.toFixed(1)}, Z=${indicatorMap[sym].zScore.toFixed(2)}, 추세=${indicatorMap[sym].trend > 0 ? "↑" : indicatorMap[sym].trend < 0 ? "↓" : "→"}${history.length === 0 ? " (히스토리 없음)" : ""}`,
-    );
-  });
-  await Promise.all(historyPromises);
-
-  // 5. Group bots by user
-  const userBots = new Map<string, BotRow[]>();
-  for (const b of bots) {
-    const list = userBots.get(b.user_id) || [];
-    list.push(b);
-    userBots.set(b.user_id, list);
-  }
-
-  // 6. Process each user's bots
-  for (const [userId, botList] of userBots) {
-    const portfolio = await getPortfolio(db, userId);
-
-    for (const bot of botList) {
-      try {
-        const sym = bot.symbol.replace("/", "");
-        const price = prices[sym];
-        if (!price) {
-          log(`${bot.name}: 가격 없음 (${sym})`);
-          continue;
-        }
-
-        const ind = indicatorMap[sym];
-        if (!ind) {
-          log(`${bot.name}: 지표 없음`);
-          continue;
-        }
-
-        // Check min interval
-        const lastTime = await getLastTradeTime(db, bot.id);
-        const minInt = MIN_INTERVAL[bot.strategy] || 900000;
-        if (lastTime > 0 && Date.now() - lastTime < minInt) continue;
-
-        const config = JSON.parse(bot.config || "{}");
-        const state = getBotState(config);
-        const base = sym.replace("USDT", "");
-        const pos = getPosition(portfolio.positions, base);
-        const cash = getCash(portfolio.positions);
-
-        let signal: TradeSignal | null = null;
-        let newState = state;
-
-        switch (bot.strategy) {
-          case "DCA":
-            signal = strategyDCA(price, ind, pos, cash, config);
-            break;
-          case "GRID": {
-            const r = strategyGrid(price, ind, pos, cash, config, state);
-            signal = r.signal;
-            newState = r.newState;
-            break;
-          }
-          case "MOMENTUM": {
-            const r = strategyMomentum(price, ind, pos, cash, config, state);
-            signal = r.signal;
-            newState = r.newState;
-            break;
-          }
-          case "MEAN_REVERSION":
-            signal = strategyMeanReversion(price, ind, pos, cash, config);
-            break;
-          case "TRAILING": {
-            const r = strategyTrailing(price, ind, pos, cash, config, state);
-            signal = r.signal;
-            newState = r.newState;
-            break;
-          }
-          case "MARTINGALE": {
-            const r = strategyMartingale(price, ind, pos, cash, config, state);
-            signal = r.signal;
-            newState = r.newState;
-            break;
-          }
-          case "SCALPING":
-            signal = strategyScalping(price, ind, pos, cash, config);
-            break;
-          case "STAT_ARB":
-            signal = strategyStatArb(price, ind, pos, cash, config);
-            break;
-          case "FUNDING_ARB":
-            signal = strategyFundingArb(price, ind, pos, cash, config);
-            break;
-          case "RL_AGENT":
-            signal = strategyRLAgent(price, ind, pos, cash, config);
-            break;
-          case "ENSEMBLE": {
-            const r = strategyEnsemble(price, ind, pos, cash, config, state);
-            signal = r.signal;
-            newState = r.newState;
-            break;
-          }
-          default:
-            signal = strategyMomentum(
-              price,
-              ind,
-              pos,
-              cash,
-              config,
-              state,
-            ).signal;
-        }
-
-        if (signal) {
-          let pnl = 0;
-          if (signal.side === "SELL" && pos)
-            pnl = (price - pos.entryPrice) * signal.quantity;
-
-          await recordTrade(
-            db,
-            userId,
-            bot.id,
-            bot.symbol,
-            signal.side,
-            price,
-            signal.quantity,
-            pnl,
-            signal.reason,
-          );
-          portfolio.positions = updatePositions(
-            portfolio.positions,
-            signal.side,
-            base,
-            signal.quantity,
-            price,
-            signal.cost,
-          );
-          await updateBotStats(db, bot.id);
-
-          log(
-            `[${bot.name}] ${signal.side} ${signal.quantity.toFixed(6)} ${base} @ $${price.toFixed(2)} | ${signal.reason}`,
-          );
-        }
-
-        // Save state if changed
-        if (newState !== state)
-          await saveBotState(db, bot.id, config, newState);
-      } catch (err) {
-        log(`[${bot.name}] 오류: ${err}`);
+  // 동시 실행 방지 (CRITICAL-1): D1 lock row
+  const lockId = "engine_lock";
+  const lockTimeout = 4 * 60 * 1000; // 4분 (cron 5분 주기보다 짧게)
+  try {
+    // lock 테이블 없으면 생성
+    await db
+      .prepare(
+        "CREATE TABLE IF NOT EXISTS engine_locks (id TEXT PRIMARY KEY, locked_at TEXT, locked_by TEXT)",
+      )
+      .run();
+    const existingLock = await db
+      .prepare("SELECT locked_at FROM engine_locks WHERE id = ?")
+      .bind(lockId)
+      .first<{ locked_at: string }>();
+    if (existingLock) {
+      const elapsed = Date.now() - new Date(existingLock.locked_at).getTime();
+      if (elapsed < lockTimeout) {
+        log("엔진 이미 실행 중 (lock 활성) - 스킵");
+        return logs;
       }
+      // 타임아웃된 lock → 해제 후 진행
+    }
+    await db
+      .prepare(
+        "INSERT OR REPLACE INTO engine_locks (id, locked_at, locked_by) VALUES (?, ?, ?)",
+      )
+      .bind(lockId, new Date().toISOString(), "cron")
+      .run();
+  } catch {
+    // lock 처리 실패해도 엔진은 실행 (호환성)
+  }
+
+  try {
+    // 1. Get running bots
+    const { results } = await db
+      .prepare(
+        "SELECT id, user_id, name, strategy, symbol, config, status FROM bots WHERE status = 'RUNNING'",
+      )
+      .all();
+    const bots = (results || []) as unknown as BotRow[];
+    if (!bots.length) {
+      log("실행 중인 봇 없음");
+      return logs;
+    }
+    log(`${bots.length}개 봇 처리 시작`);
+
+    // 2. Collect unique symbols
+    const symbols = [...new Set(bots.map((b) => b.symbol.replace("/", "")))];
+
+    // 3. Fetch current prices (Bybit API)
+    const prices = await fetchCurrentPrices(symbols);
+    log(
+      `가격: ${Object.entries(prices)
+        .map(([s, p]) => `${s}=$${p.toFixed(2)}`)
+        .join(", ")}`,
+    );
+
+    // 4. Fetch history & calculate indicators per symbol (Bybit v5)
+    const indicatorMap: Record<string, Indicators> = {};
+    const MIN_HISTORY = 20; // 최소 히스토리 길이 (MEDIUM-1)
+    const historyPromises = symbols.map(async (sym) => {
+      const history = await fetchHistory(sym);
+      if (history.length < MIN_HISTORY) {
+        log(
+          `${sym}: 히스토리 부족 (${history.length}/${MIN_HISTORY}) - 거래 스킵`,
+        );
+        return; // indicatorMap에 추가하지 않음 → 해당 심볼 거래 skip
+      }
+      indicatorMap[sym] = calcIndicators(history, prices[sym] || 0);
+      log(
+        `${sym}: RSI=${indicatorMap[sym].rsi.toFixed(1)}, Z=${indicatorMap[sym].zScore.toFixed(2)}, 추세=${indicatorMap[sym].trend > 0 ? "↑" : indicatorMap[sym].trend < 0 ? "↓" : "→"}`,
+      );
+    });
+    await Promise.all(historyPromises);
+
+    // 5. Group bots by user
+    const userBots = new Map<string, BotRow[]>();
+    for (const b of bots) {
+      const list = userBots.get(b.user_id) || [];
+      list.push(b);
+      userBots.set(b.user_id, list);
     }
 
-    await savePortfolio(db, portfolio.id, userId, portfolio.positions, prices);
-  }
+    // 6. Process each user's bots
+    for (const [userId, botList] of userBots) {
+      const portfolio = await getPortfolio(db, userId);
 
-  log(`엔진 실행 완료 (${new Date().toISOString()})`);
-  return logs;
+      for (const bot of botList) {
+        try {
+          const sym = bot.symbol.replace("/", "");
+          const price = prices[sym];
+          if (!price) {
+            log(`${bot.name}: 가격 없음 (${sym})`);
+            continue;
+          }
+
+          const ind = indicatorMap[sym];
+          if (!ind) {
+            log(`${bot.name}: 지표 없음`);
+            continue;
+          }
+
+          // Check min interval
+          const lastTime = await getLastTradeTime(db, bot.id);
+          const minInt = MIN_INTERVAL[bot.strategy] || 900000;
+          if (lastTime > 0 && Date.now() - lastTime < minInt) continue;
+
+          const config = JSON.parse(bot.config || "{}");
+          const state = getBotState(config);
+          const base = sym.replace("USDT", "");
+          const pos = getPosition(portfolio.positions, base);
+          const cash = getCash(portfolio.positions);
+
+          let signal: TradeSignal | null = null;
+          let newState = state;
+
+          switch (bot.strategy) {
+            case "DCA":
+              signal = strategyDCA(price, ind, pos, cash, config);
+              break;
+            case "GRID": {
+              const r = strategyGrid(price, ind, pos, cash, config, state);
+              signal = r.signal;
+              newState = r.newState;
+              break;
+            }
+            case "MOMENTUM": {
+              const r = strategyMomentum(price, ind, pos, cash, config, state);
+              signal = r.signal;
+              newState = r.newState;
+              break;
+            }
+            case "MEAN_REVERSION":
+              signal = strategyMeanReversion(price, ind, pos, cash, config);
+              break;
+            case "TRAILING": {
+              const r = strategyTrailing(price, ind, pos, cash, config, state);
+              signal = r.signal;
+              newState = r.newState;
+              break;
+            }
+            case "MARTINGALE": {
+              const r = strategyMartingale(
+                price,
+                ind,
+                pos,
+                cash,
+                config,
+                state,
+              );
+              signal = r.signal;
+              newState = r.newState;
+              break;
+            }
+            case "SCALPING":
+              signal = strategyScalping(price, ind, pos, cash, config);
+              break;
+            case "STAT_ARB":
+              signal = strategyStatArb(price, ind, pos, cash, config);
+              break;
+            case "FUNDING_ARB":
+              signal = strategyFundingArb(price, ind, pos, cash, config);
+              break;
+            case "RL_AGENT":
+              signal = strategyRLAgent(price, ind, pos, cash, config);
+              break;
+            case "ENSEMBLE": {
+              const r = strategyEnsemble(price, ind, pos, cash, config, state);
+              signal = r.signal;
+              newState = r.newState;
+              break;
+            }
+            default:
+              signal = strategyMomentum(
+                price,
+                ind,
+                pos,
+                cash,
+                config,
+                state,
+              ).signal;
+          }
+
+          if (signal) {
+            // SELL 시 보유량 초과 방지 (CRITICAL-3)
+            if (signal.side === "SELL" && pos) {
+              signal.quantity = Math.min(signal.quantity, pos.amount);
+              signal.cost = signal.quantity * price;
+            }
+
+            // PnL 계산: 수수료 반영 (HIGH-6) - Bybit taker 0.1%
+            const fee = price * signal.quantity * 0.001;
+            let pnl = 0;
+            if (signal.side === "SELL" && pos && pos.entryPrice > 0)
+              pnl = (price - pos.entryPrice) * signal.quantity - fee;
+            else if (signal.side === "BUY") pnl = -fee; // 매수 수수료는 비용으로 기록
+
+            await recordTrade(
+              db,
+              userId,
+              bot.id,
+              bot.symbol,
+              signal.side,
+              price,
+              signal.quantity,
+              pnl,
+              signal.reason,
+            );
+            portfolio.positions = updatePositions(
+              portfolio.positions,
+              signal.side,
+              base,
+              signal.quantity,
+              price,
+              signal.cost,
+            );
+            await updateBotStats(db, bot.id);
+
+            log(
+              `[${bot.name}] ${signal.side} ${signal.quantity.toFixed(6)} ${base} @ $${price.toFixed(2)} | ${signal.reason}`,
+            );
+          }
+
+          // Save state if changed
+          if (newState !== state)
+            await saveBotState(db, bot.id, config, newState);
+        } catch (err) {
+          log(`[${bot.name}] 오류: ${err}`);
+        }
+      }
+
+      await savePortfolio(
+        db,
+        portfolio.id,
+        userId,
+        portfolio.positions,
+        prices,
+      );
+    }
+
+    log(`엔진 실행 완료 (${new Date().toISOString()})`);
+    return logs;
+  } finally {
+    // lock 해제 (CRITICAL-1)
+    try {
+      await db
+        .prepare("DELETE FROM engine_locks WHERE id = ?")
+        .bind(lockId)
+        .run();
+    } catch {
+      /* lock 해제 실패 시 타임아웃으로 자동 해제 */
+    }
+  }
 }

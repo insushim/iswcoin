@@ -8,7 +8,7 @@ import { portfolioRoutes } from "./routes/portfolio";
 import { backtestRoutes } from "./routes/backtest";
 import { regimeRoutes } from "./routes/regime";
 import { settingsRoutes } from "./routes/settings";
-import { verifyJWT } from "./utils";
+import { verifyJWT, constantTimeEqual } from "./utils";
 import { runPaperTrading } from "./engine";
 
 export type Env = {
@@ -147,8 +147,8 @@ app.post("/api/engine/run", async (c) => {
   const secret = c.req.header("X-Engine-Secret");
   const engineSecret = c.env.ENGINE_SECRET;
 
-  // ENGINE_SECRET이 설정된 경우 반드시 일치해야 함
-  if (engineSecret && secret !== engineSecret) {
+  // ENGINE_SECRET이 설정된 경우 반드시 일치해야 함 (constant-time 비교)
+  if (engineSecret && (!secret || !constantTimeEqual(secret, engineSecret))) {
     return c.json({ error: "Invalid engine secret" }, 403);
   }
 
@@ -193,6 +193,11 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ) {
-    ctx.waitUntil(runPaperTrading(env));
+    // Scheduled 오류 로깅 (MEDIUM-8)
+    ctx.waitUntil(
+      runPaperTrading(env).catch((err) =>
+        console.error("[Scheduled] Engine error:", err),
+      ),
+    );
   },
 };

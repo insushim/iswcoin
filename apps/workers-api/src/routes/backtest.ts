@@ -1898,10 +1898,14 @@ function backtestEnsemble(
     const buyRatio = totalWeight > 0 ? buyWeight / totalWeight : 0;
     const sellRatio = totalWeight > 0 ? sellWeight / totalWeight : 0;
 
+    // 수수료 시뮬레이션 (Bybit taker 0.1%)
+    const FEE_RATE = 0.001;
+
     // SELL 우선 (리스크 관리)
     if (sellRatio >= sellThreshold && holdings > 0) {
-      const pnl = (price - avgEntry) * holdings;
-      cash += holdings * price;
+      const sellFee = holdings * price * FEE_RATE;
+      const pnl = (price - avgEntry) * holdings - sellFee;
+      cash += holdings * price - sellFee;
       trades.push({
         date,
         side: "SELL",
@@ -1916,11 +1920,11 @@ function backtestEnsemble(
     }
     // BUY
     else if (buyRatio >= buyThreshold && cash > 100 && !holdings) {
-      // 포지션 크기: 자본의 15~25% (개별 전략과 동일 수준)
       const sizePct = 0.15 + buyRatio * 0.1;
       const amount = Math.min(cash * sizePct, cash - 100);
       if (amount > 50) {
-        const qty = amount / price;
+        const buyFee = amount * FEE_RATE;
+        const qty = (amount - buyFee) / price;
         avgEntry = price;
         cash -= amount;
         holdings = qty;
@@ -1946,7 +1950,8 @@ function backtestEnsemble(
       if (exposure < capital * 0.3) {
         const amount = Math.min(cash * 0.08, cash - 100);
         if (amount > 50) {
-          const qty = amount / price;
+          const buyFee = amount * FEE_RATE;
+          const qty = (amount - buyFee) / price;
           avgEntry = (avgEntry * holdings + price * qty) / (holdings + qty);
           cash -= amount;
           holdings += qty;
@@ -1989,7 +1994,9 @@ backtestRoutes.post("/run", async (c) => {
   const strategy = (body.strategy as string) || "MOMENTUM";
   const startDate = (body.startDate as string) || "2024-10-01";
   const endDate = (body.endDate as string) || "2025-01-20";
-  const initialCapital = (body.initialCapital as number) || 10000;
+  const rawCapital = body.initialCapital as number;
+  const initialCapital =
+    typeof rawCapital === "number" && rawCapital > 0 ? rawCapital : 10000;
   const params = (body.params as Record<string, unknown>) || {};
 
   try {
