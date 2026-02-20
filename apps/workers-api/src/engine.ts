@@ -356,8 +356,11 @@ async function recordTrade(
 }
 
 async function updateBotStats(db: D1Database, botId: string) {
+  // SELL 거래만 집계 (BUY는 PnL 0이라 win_rate 왜곡) (MEDIUM-5)
   const { results } = await db
-    .prepare("SELECT pnl FROM trades WHERE bot_id = ? AND status = 'CLOSED'")
+    .prepare(
+      "SELECT pnl FROM trades WHERE bot_id = ? AND status = 'CLOSED' AND side = 'SELL'",
+    )
     .bind(botId)
     .all();
   const all = (results || []) as Array<{ pnl: number }>;

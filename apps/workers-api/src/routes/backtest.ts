@@ -2066,7 +2066,7 @@ backtestRoutes.post("/run", async (c) => {
 
 backtestRoutes.get("/results", async (c) => {
   const userId = c.get("userId");
-  const limit = parseInt(c.req.query("limit") || "20");
+  const limit = Math.min(parseInt(c.req.query("limit") || "20") || 20, 100);
   const { results } = await c.env.DB.prepare(
     "SELECT * FROM backtest_results WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
   )
