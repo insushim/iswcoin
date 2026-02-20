@@ -141,6 +141,12 @@ export class BotRunnerService {
     config: Record<string, number>,
     userId: string,
   ): Promise<void> {
+    // C1: 이미 실행 중인 봇 중복 시작 방지
+    if (this.state.activeBots.has(botId)) {
+      logger.warn("Bot already running, skipping duplicate start", { botId });
+      return;
+    }
+
     const strategy = getStrategy(strategyType, config);
     const exchangeName = exchangeService.getExchangeNameFromEnum(exchangeEnum);
 
@@ -213,13 +219,40 @@ export class BotRunnerService {
     };
     this.state.activeBots.set(botId, control);
 
-    // REAL 모드: 시작 시 포지션 대사
-    if (mode === "REAL" && cachedExchange) {
-      await this.positionManager
-        .reconcilePosition(botId, symbol, cachedExchange, 0)
-        .catch((err) =>
-          logger.debug("Background task failed", { error: String(err) }),
-        );
+    // H3: REAL 모드 시작 시 DB에서 포지션 복원
+    if (mode === "REAL") {
+      const botForPosition = await prisma.bot.findUnique({
+        where: { id: botId },
+        select: { riskConfig: true },
+      });
+      const rcPos = botForPosition?.riskConfig as Record<
+        string,
+        unknown
+      > | null;
+      this.positionManager.restoreRealPosition(botId, rcPos);
+
+      // H6: REAL 모드 초기 자본금으로 peakEquity 설정
+      if (cachedExchange) {
+        try {
+          const initBalances = await exchangeService.getBalance(cachedExchange);
+          const initUsdt =
+            (initBalances["USDT"] as { total?: number })?.total ?? 0;
+          control.lastKnownCapital = initUsdt;
+          control.peakEquity = initUsdt;
+        } catch (err) {
+          logger.warn("Failed to get initial REAL balance", {
+            botId,
+            error: String(err),
+          });
+        }
+
+        // 포지션 대사
+        await this.positionManager
+          .reconcilePosition(botId, symbol, cachedExchange, 0)
+          .catch((err) =>
+            logger.debug("Background task failed", { error: String(err) }),
+          );
+      }
     }
 
     const runLoop = async () => {
@@ -319,6 +352,50 @@ export class BotRunnerService {
         }
 
         if (ohlcvRaw.length === 0) {
+          // C2: OHLCV 실패 시에도 SL/TP는 반드시 체크 (ticker fallback)
+          const fallbackPosition = this.positionManager.getPosition(
+            botId,
+            symbol,
+          );
+          if (fallbackPosition && fallbackPosition.isOpen) {
+            try {
+              const tickerExchange =
+                exchange ?? exchangeService.getPublicExchange(exchangeName);
+              const ticker = await exchangeService.getTicker(
+                tickerExchange,
+                symbol,
+              );
+              const tickerPrice = ticker?.last ?? 0;
+              if (tickerPrice > 0) {
+                const slTpCheck = this.orderCalculator.checkStopLossTakeProfit(
+                  fallbackPosition,
+                  tickerPrice,
+                );
+                if (slTpCheck && slTpCheck.triggered) {
+                  logger.warn(
+                    "SL/TP triggered via ticker fallback (OHLCV unavailable)",
+                    { botId, symbol, reason: slTpCheck.reason, tickerPrice },
+                  );
+                  await this.realTrading.executeClose(
+                    botId,
+                    symbol,
+                    exchangeName,
+                    mode,
+                    exchange,
+                    fallbackPosition,
+                    tickerPrice,
+                    slTpCheck.reason,
+                    this.paperTrading,
+                  );
+                }
+              }
+            } catch (tickerErr) {
+              logger.warn("Ticker fallback for SL/TP also failed", {
+                botId,
+                error: String(tickerErr),
+              });
+            }
+          }
           return;
         }
 
@@ -416,9 +493,13 @@ export class BotRunnerService {
           control.peakEquity > 0 ? control.peakEquity : undefined,
         );
 
-        // 피크 에퀴티 업데이트 (MDD 추적용)
+        // H6: 피크 에퀴티 업데이트 (MDD 추적용) - REAL 모드는 실제 자본금 사용
         if (riskCheck.allowed) {
-          const currentEquity = env.PAPER_INITIAL_BALANCE + unrealizedPnl;
+          const baseCapital =
+            mode === "REAL"
+              ? (control.lastKnownCapital ?? 0)
+              : env.PAPER_INITIAL_BALANCE;
+          const currentEquity = baseCapital + unrealizedPnl;
           if (currentEquity > control.peakEquity) {
             control.peakEquity = currentEquity;
           }

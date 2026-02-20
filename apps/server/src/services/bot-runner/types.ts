@@ -45,6 +45,7 @@ export interface ActiveBotState {
   timerId?: ReturnType<typeof setTimeout>;
   loopCount: number;
   peakEquity: number;
+  lastKnownCapital?: number; // REAL 모드: 마지막 확인된 USDT 잔고
 }
 
 /**
